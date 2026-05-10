@@ -6,7 +6,10 @@ import {
   updateRelayTransaction,
   getRetryCount,
 } from './lifecycle.js'
-import { simulateRelay } from './relay-simulator.js'
+import { executeRelay, type RelayResult } from './relay-executor.js'
+import { createLogger } from './logger.js'
+
+const logger = createLogger('processor')
 
 export interface ProcessResult {
   requestId: string
@@ -52,6 +55,10 @@ export async function processRequest(
 
         // Only process requests that are in 'pending' status
         if (currentStatus !== 'pending') {
+          logger.info('Skipping request — not in pending status', {
+            requestId,
+            currentStatus,
+          })
           return {
             requestId,
             success: true,
@@ -71,9 +78,13 @@ export async function processRequest(
           if (!failResult.success) {
             throw new Error(`Failed to transition to failed: ${failResult.error}`)
           }
-          console.info(
-            `[processor] Request ${requestId} exceeded max retries (${retryCount}/${config.maxRetries}) — transitioned to failed`
-          )
+          logger.info('Request exceeded max retries — transitioned to failed', {
+            requestId,
+            retryCount,
+            maxRetries: config.maxRetries,
+            previousStatus: 'pending',
+            newStatus: 'failed',
+          })
           return {
             requestId,
             success: true,
@@ -81,7 +92,29 @@ export async function processRequest(
           }
         }
 
-        // Step 3: Transition pending → approved
+        // Step 3: Guard — check for existing submitted or confirmed RelayTransaction
+        const existingActiveRelay = await (tx as any).relayTransaction.findFirst({
+          where: {
+            sponsorshipRequestId: requestId,
+            status: { in: ['submitted', 'confirmed'] },
+          },
+        })
+
+        if (existingActiveRelay) {
+          logger.info('Skipping relay — active relay transaction already exists', {
+            requestId,
+            existingRelayId: existingActiveRelay.id,
+            existingRelayStatus: existingActiveRelay.status,
+          })
+          return {
+            requestId,
+            success: true,
+            finalStatus: currentStatus,
+            error: `Active relay transaction already exists (status: ${existingActiveRelay.status}) — skipped`,
+          }
+        }
+
+        // Step 4: Transition pending → approved
         const approveResult = await transitionSponsorshipStatus(
           tx as any,
           requestId,
@@ -90,21 +123,31 @@ export async function processRequest(
         if (!approveResult.success) {
           throw new Error(`Failed to transition to approved: ${approveResult.error}`)
         }
+        logger.info('Status transition', {
+          requestId,
+          previousStatus: 'pending',
+          newStatus: 'approved',
+        })
 
-        // Step 4: Create relay transaction
+        // Step 5: Create relay transaction
         const relayTx = await createRelayTransaction(tx as any, requestId)
 
-        // Step 5: Transition approved → relayed
-        const relayResult = await transitionSponsorshipStatus(
+        // Step 6: Transition approved → relayed
+        const relayTransitionResult = await transitionSponsorshipStatus(
           tx as any,
           requestId,
           'relayed'
         )
-        if (!relayResult.success) {
-          throw new Error(`Failed to transition to relayed: ${relayResult.error}`)
+        if (!relayTransitionResult.success) {
+          throw new Error(`Failed to transition to relayed: ${relayTransitionResult.error}`)
         }
+        logger.info('Status transition', {
+          requestId,
+          previousStatus: 'approved',
+          newStatus: 'relayed',
+        })
 
-        // Step 6: Update relay transaction to submitted
+        // Step 7: Update relay transaction to submitted with submittedAt timestamp
         const submitResult = await updateRelayTransaction(
           tx as any,
           relayTx.id,
@@ -114,17 +157,32 @@ export async function processRequest(
           throw new Error(`Failed to update relay TX to submitted: ${submitResult.error}`)
         }
 
-        // Step 7: Invoke relay simulator
-        const relaySimResult = await simulateRelay(requestId, config.relayFailureRate)
+        // Step 8: Invoke relay executor
+        logger.info('Invoking relay executor', {
+          requestId,
+          relayAttempt: relayTx.relayAttempt,
+          maxRetries: config.maxRetries,
+        })
 
-        // Step 8: Handle relay result
-        if (relaySimResult.success) {
+        const relayExecResult: RelayResult = await executeRelay(requestId)
+
+        // Step 9: Handle relay result
+        if (relayExecResult.success) {
+          // Log block number if available
+          if (relayExecResult.blockNumber != null) {
+            logger.info('Relay confirmed with block number', {
+              requestId,
+              transactionHash: relayExecResult.transactionHash,
+              blockNumber: relayExecResult.blockNumber.toString(),
+            })
+          }
+
           // Update relay TX to confirmed with transaction hash
           const confirmResult = await updateRelayTransaction(
             tx as any,
             relayTx.id,
             'confirmed',
-            { transactionHash: relaySimResult.transactionHash! }
+            { transactionHash: relayExecResult.transactionHash! }
           )
           if (!confirmResult.success) {
             throw new Error(`Failed to update relay TX to confirmed: ${confirmResult.error}`)
@@ -139,6 +197,11 @@ export async function processRequest(
           if (!completeResult.success) {
             throw new Error(`Failed to transition to completed: ${completeResult.error}`)
           }
+          logger.info('Status transition', {
+            requestId,
+            previousStatus: 'relayed',
+            newStatus: 'completed',
+          })
 
           return {
             requestId,
@@ -151,7 +214,7 @@ export async function processRequest(
             tx as any,
             relayTx.id,
             'failed',
-            { failureReason: relaySimResult.failureReason! }
+            { failureReason: relayExecResult.failureReason! }
           )
           if (!failRelayResult.success) {
             throw new Error(`Failed to update relay TX to failed: ${failRelayResult.error}`)
@@ -166,6 +229,12 @@ export async function processRequest(
           if (!failResult.success) {
             throw new Error(`Failed to transition to failed: ${failResult.error}`)
           }
+          logger.info('Status transition', {
+            requestId,
+            previousStatus: 'relayed',
+            newStatus: 'failed',
+            failureReason: relayExecResult.failureReason,
+          })
 
           return {
             requestId,
@@ -182,7 +251,10 @@ export async function processRequest(
     return result
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    console.error(`[processor] Error processing request ${requestId}: ${message}`)
+    logger.error('Error processing request', {
+      requestId,
+      error: message,
+    })
 
     return {
       requestId,

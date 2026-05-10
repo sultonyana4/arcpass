@@ -1,6 +1,9 @@
 import { prisma } from '@arcpass/shared'
 import type { WorkerConfig } from './config.js'
+import { createLogger } from './logger.js'
 import { processRequest } from './processor.js'
+
+const logger = createLogger('poller')
 
 export interface Poller {
   start(): void
@@ -43,14 +46,15 @@ export function createPoller(config: WorkerConfig): Poller {
 
         // Log failures and continue with remaining batch (Req 1.6)
         if (!result.success) {
-          console.error(
-            `[poller] Failed to process request ${request.id}: ${result.error}`
-          )
+          logger.error('Failed to process request', {
+            requestId: request.id,
+            error: result.error,
+          })
         }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      console.error(`[poller] Error during poll cycle: ${message}`)
+      logger.error('Error during poll cycle', { error: message })
     }
 
     // Schedule next cycle if still running
@@ -77,7 +81,7 @@ export function createPoller(config: WorkerConfig): Poller {
     if (isRunning) return
 
     isRunning = true
-    console.info('[poller] Starting poll cycles')
+    logger.info('Starting poll cycles')
 
     // Start the first cycle immediately
     processingPromise = pollCycle()
@@ -87,7 +91,7 @@ export function createPoller(config: WorkerConfig): Poller {
     if (!isRunning) return Promise.resolve()
 
     isRunning = false
-    console.info('[poller] Stopping poll cycles')
+    logger.info('Stopping poll cycles')
 
     // Clear any pending timeout
     if (timeoutId !== null) {

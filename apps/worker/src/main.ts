@@ -1,4 +1,8 @@
 import { start, stop } from './worker.js'
+import { loadConfig } from './config.js'
+import { createLogger } from './logger.js'
+
+const logger = createLogger('worker')
 
 // Register signal handlers
 process.on('SIGTERM', shutdown)
@@ -10,12 +14,17 @@ async function shutdown(): Promise<void> {
   if (isShuttingDown) return
   isShuttingDown = true
 
-  console.info('[main] Shutdown signal received')
+  logger.info('Shutdown signal received')
+
+  const config = loadConfig()
 
   const timeout = setTimeout(() => {
-    console.error('[main] Shutdown timed out after 10 seconds')
+    logger.warn(
+      'Shutdown timed out, in-progress relay may need manual reconciliation',
+      { timeoutMs: config.shutdownTimeoutMs }
+    )
     process.exit(1)
-  }, 10000)
+  }, config.shutdownTimeoutMs)
 
   try {
     await stop()
@@ -23,13 +32,15 @@ async function shutdown(): Promise<void> {
     process.exit(0)
   } catch (error) {
     clearTimeout(timeout)
-    console.error('[main] Error during shutdown:', error)
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error('Error during shutdown', { error: message })
     process.exit(1)
   }
 }
 
 // Start the worker
 start().catch((error) => {
-  console.error('[main] Failed to start worker:', error)
+  const message = error instanceof Error ? error.message : String(error)
+  logger.error('Failed to start worker', { error: message })
   process.exit(1)
 })
