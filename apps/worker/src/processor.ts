@@ -19,6 +19,15 @@ export interface ProcessResult {
 }
 
 /**
+ * Determines if a relay failure reason indicates an AlreadySponsored contract error.
+ * When the on-chain contract has already transferred funds, the relay should be
+ * treated as a success (confirmed) rather than a failure.
+ */
+export function isAlreadySponsoredError(failureReason: string | null): boolean {
+  return failureReason?.startsWith('AlreadySponsored') ?? false
+}
+
+/**
  * Processes a single sponsorship request through the full lifecycle
  * within a single database transaction.
  *
@@ -31,12 +40,13 @@ export async function processRequest(
   requestId: string,
   config: WorkerConfig
 ): Promise<ProcessResult> {
+  const processorStartTime = Date.now()
   try {
     const result = await prisma.$transaction(
       async (tx) => {
         // Step 1: Acquire row-level lock via SELECT FOR UPDATE SKIP LOCKED
-        const locked = await tx.$queryRaw<Array<{ id: string; status: string }>>`
-          SELECT id, status FROM "sponsorship_requests"
+        const locked = await tx.$queryRaw<Array<{ id: string; status: string; walletId: string }>>`
+          SELECT id, status, "walletId" FROM "sponsorship_requests"
           WHERE id = ${requestId}
           FOR UPDATE SKIP LOCKED
         `
@@ -52,6 +62,7 @@ export async function processRequest(
         }
 
         const currentStatus = locked[0].status as SponsorshipStatusValue
+        const walletId = locked[0].walletId
 
         // Only process requests that are in 'pending' status
         if (currentStatus !== 'pending') {
@@ -67,7 +78,80 @@ export async function processRequest(
           }
         }
 
-        // Step 2: Check retry count — enforce max retry limit
+        // Step 3: Check wallet.isBlocked → reject if true
+        const wallet = await (tx as any).wallet.findUnique({ where: { id: walletId } })
+        if (wallet?.isBlocked) {
+          await transitionSponsorshipStatus(tx as any, requestId, 'rejected')
+          await (tx as any).sponsorshipRequest.update({
+            where: { id: requestId },
+            data: { eligibilityReason: 'Wallet is blocked' },
+          })
+          logger.info('Request rejected — wallet is blocked', {
+            sponsorshipRequestId: requestId,
+            walletAddress: wallet.walletAddress,
+          })
+          return { requestId, success: true, finalStatus: 'rejected' as SponsorshipStatusValue }
+        }
+
+        const walletAddress = wallet?.walletAddress ?? 'unknown'
+
+        // Log: processor begins processing (Requirement 6.1)
+        logger.info('Processing sponsorship request', {
+          sponsorshipRequestId: requestId,
+          walletAddress,
+          relayAttempt: (await getRetryCount(tx as any, requestId)) + 1,
+        })
+
+        // Step 4: Check for existing confirmed/submitted relay → idempotency guard
+        const existingActiveRelay = await (tx as any).relayTransaction.findFirst({
+          where: {
+            sponsorshipRequestId: requestId,
+            status: { in: ['submitted', 'confirmed'] },
+          },
+        })
+
+        if (existingActiveRelay) {
+          if (existingActiveRelay.status === 'confirmed') {
+            // Completion shortcut: transition to completed and increment sponsorshipCount
+            const completeResult = await transitionSponsorshipStatus(
+              tx as any,
+              requestId,
+              'completed'
+            )
+            if (!completeResult.success) {
+              throw new Error(`Failed to transition to completed: ${completeResult.error}`)
+            }
+            await (tx as any).wallet.update({
+              where: { id: walletId },
+              data: { sponsorshipCount: { increment: 1 } },
+            })
+            logger.info('Existing confirmed relay found — completed with count increment', {
+              sponsorshipRequestId: requestId,
+              relayTransactionId: existingActiveRelay.id,
+              walletAddress,
+            })
+            return {
+              requestId,
+              success: true,
+              finalStatus: 'completed' as SponsorshipStatusValue,
+            }
+          }
+
+          // Status is 'submitted' — already in-flight, skip processing
+          logger.info('Skipping relay — submitted relay transaction already in-flight', {
+            sponsorshipRequestId: requestId,
+            relayTransactionId: existingActiveRelay.id,
+            walletAddress,
+          })
+          return {
+            requestId,
+            success: true,
+            finalStatus: currentStatus,
+            error: `Active relay transaction already exists (status: ${existingActiveRelay.status}) — skipped`,
+          }
+        }
+
+        // Step 5: Check retry count — enforce max retry limit
         const retryCount = await getRetryCount(tx as any, requestId)
         if (retryCount >= config.maxRetries) {
           const failResult = await transitionSponsorshipStatus(
@@ -82,6 +166,7 @@ export async function processRequest(
             sponsorshipRequestId: requestId,
             retryCount,
             maxRetries: config.maxRetries,
+            walletAddress,
             previousStatus: 'pending',
             newStatus: 'failed',
           })
@@ -92,29 +177,7 @@ export async function processRequest(
           }
         }
 
-        // Step 3: Guard — check for existing submitted or confirmed RelayTransaction
-        const existingActiveRelay = await (tx as any).relayTransaction.findFirst({
-          where: {
-            sponsorshipRequestId: requestId,
-            status: { in: ['submitted', 'confirmed'] },
-          },
-        })
-
-        if (existingActiveRelay) {
-          logger.info('Skipping relay — active relay transaction already exists', {
-            sponsorshipRequestId: requestId,
-            existingRelayId: existingActiveRelay.id,
-            existingRelayStatus: existingActiveRelay.status,
-          })
-          return {
-            requestId,
-            success: true,
-            finalStatus: currentStatus,
-            error: `Active relay transaction already exists (status: ${existingActiveRelay.status}) — skipped`,
-          }
-        }
-
-        // Step 4: Transition pending → approved
+        // Step 6: Transition pending → approved
         const approveResult = await transitionSponsorshipStatus(
           tx as any,
           requestId,
@@ -125,14 +188,15 @@ export async function processRequest(
         }
         logger.info('Status transition', {
           sponsorshipRequestId: requestId,
+          walletAddress,
           previousStatus: 'pending',
           newStatus: 'approved',
         })
 
-        // Step 5: Create relay transaction
+        // Step 7: Create relay transaction
         const relayTx = await createRelayTransaction(tx as any, requestId)
 
-        // Step 6: Transition approved → relayed
+        // Step 8: Transition approved → relayed
         const relayTransitionResult = await transitionSponsorshipStatus(
           tx as any,
           requestId,
@@ -143,11 +207,13 @@ export async function processRequest(
         }
         logger.info('Status transition', {
           sponsorshipRequestId: requestId,
+          relayTransactionId: relayTx.id,
+          walletAddress,
           previousStatus: 'approved',
           newStatus: 'relayed',
         })
 
-        // Step 7: Update relay transaction to submitted with submittedAt timestamp
+        // Step 9: Update relay transaction to submitted with submittedAt timestamp
         const submitResult = await updateRelayTransaction(
           tx as any,
           relayTx.id,
@@ -157,27 +223,31 @@ export async function processRequest(
           throw new Error(`Failed to update relay TX to submitted: ${submitResult.error}`)
         }
 
-        // Step 8: Invoke relay executor
+        // Step 10: Invoke relay executor
         logger.info('Invoking relay executor', {
           sponsorshipRequestId: requestId,
+          relayTransactionId: relayTx.id,
+          walletAddress,
           relayAttempt: relayTx.relayAttempt,
           maxRetries: config.maxRetries,
         })
 
-        const relayExecResult: RelayResult = await executeRelay(requestId, relayTx.relayAttempt)
+        const relayExecResult: RelayResult = await executeRelay(requestId, relayTx.id, relayTx.relayAttempt)
 
-        // Step 9: Handle relay result
+        // Step 11: Handle relay result
         if (relayExecResult.success) {
           // Log block number if available
           if (relayExecResult.blockNumber != null) {
             logger.info('Relay confirmed with block number', {
               sponsorshipRequestId: requestId,
+              relayTransactionId: relayTx.id,
+              walletAddress,
               transactionHash: relayExecResult.transactionHash,
               blockNumber: relayExecResult.blockNumber.toString(),
             })
           }
 
-          // Update relay TX to confirmed with transaction hash and event data
+          // Update relay TX to confirmed with transaction hash, event data, and explorerUrl
           const confirmResult = await updateRelayTransaction(
             tx as any,
             relayTx.id,
@@ -187,6 +257,7 @@ export async function processRequest(
               blockNumber: relayExecResult.blockNumber ?? null,
               eventName: 'SponsorshipGranted',
               eventData: relayExecResult.eventData ?? null,
+              explorerUrl: relayExecResult.explorerUrl ?? null,
             }
           )
           if (!confirmResult.success) {
@@ -202,8 +273,63 @@ export async function processRequest(
           if (!completeResult.success) {
             throw new Error(`Failed to transition to completed: ${completeResult.error}`)
           }
+
+          // Increment wallet sponsorshipCount
+          await (tx as any).wallet.update({
+            where: { id: walletId },
+            data: { sponsorshipCount: { increment: 1 } },
+          })
+
           logger.info('Status transition', {
             sponsorshipRequestId: requestId,
+            relayTransactionId: relayTx.id,
+            walletAddress,
+            previousStatus: 'relayed',
+            newStatus: 'completed',
+          })
+
+          return {
+            requestId,
+            success: true,
+            finalStatus: 'completed' as SponsorshipStatusValue,
+          }
+        } else if (isAlreadySponsoredError(relayExecResult.failureReason)) {
+          // AlreadySponsored: treat as success — wallet already received sponsorship on-chain
+          const confirmResult = await updateRelayTransaction(
+            tx as any,
+            relayTx.id,
+            'confirmed',
+            {
+              transactionHash: relayExecResult.transactionHash ?? undefined,
+              blockNumber: relayExecResult.blockNumber ?? null,
+              explorerUrl: relayExecResult.explorerUrl ?? null,
+            }
+          )
+          if (!confirmResult.success) {
+            throw new Error(`Failed to update relay TX to confirmed (AlreadySponsored): ${confirmResult.error}`)
+          }
+
+          // Transition relayed → completed
+          const completeResult = await transitionSponsorshipStatus(
+            tx as any,
+            requestId,
+            'completed'
+          )
+          if (!completeResult.success) {
+            throw new Error(`Failed to transition to completed (AlreadySponsored): ${completeResult.error}`)
+          }
+
+          // Increment wallet sponsorshipCount
+          await (tx as any).wallet.update({
+            where: { id: walletId },
+            data: { sponsorshipCount: { increment: 1 } },
+          })
+
+          logger.info('AlreadySponsored — treated as completed with count increment', {
+            sponsorshipRequestId: requestId,
+            relayTransactionId: relayTx.id,
+            walletAddress,
+            failureReason: relayExecResult.failureReason,
             previousStatus: 'relayed',
             newStatus: 'completed',
           })
@@ -214,7 +340,7 @@ export async function processRequest(
             finalStatus: 'completed' as SponsorshipStatusValue,
           }
         } else {
-          // Update relay TX to failed with failure reason
+          // Other failure: update relay TX to failed with failure reason
           const failRelayResult = await updateRelayTransaction(
             tx as any,
             relayTx.id,
@@ -236,6 +362,8 @@ export async function processRequest(
           }
           logger.info('Status transition', {
             sponsorshipRequestId: requestId,
+            relayTransactionId: relayTx.id,
+            walletAddress,
             previousStatus: 'relayed',
             newStatus: 'failed',
             failureReason: relayExecResult.failureReason,
@@ -256,9 +384,12 @@ export async function processRequest(
     return result
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    const truncatedMessage = message.length > 1000 ? message.slice(0, 997) + '...' : message
     logger.error('Error processing request', {
       sponsorshipRequestId: requestId,
-      error: message,
+      error: truncatedMessage,
+      relayStage: 'processor',
+      elapsedMs: Date.now() - processorStartTime,
     })
 
     return {

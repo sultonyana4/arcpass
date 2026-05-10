@@ -53,8 +53,9 @@ function isCredentialUrl(value: unknown): boolean {
 /**
  * Recursively strips sensitive fields from a data object.
  * Returns a new object with sensitive fields replaced by '[REDACTED]'.
+ * Exported for testing.
  */
-function filterSensitiveData(data: Record<string, unknown>): Record<string, unknown> {
+export function filterSensitiveData(data: Record<string, unknown>): Record<string, unknown> {
   const filtered: Record<string, unknown> = {}
 
   for (const [key, value] of Object.entries(data)) {

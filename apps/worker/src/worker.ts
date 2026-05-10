@@ -53,7 +53,7 @@ export async function start(): Promise<void> {
     sponsorshipRegistryAddress: config.contractAddressSponsorshipRegistry,
     sponsorVaultAbi,
     sponsorshipRegistryAbi,
-  }, config.txTimeoutMs)
+  }, config.txTimeoutMs, config.explorerBaseUrl)
   logger.info('Contract client initialized', {
     sponsorVault: config.contractAddressSponsorVault,
     sponsorshipRegistry: config.contractAddressSponsorshipRegistry,
@@ -75,28 +75,35 @@ export async function start(): Promise<void> {
  * Stops the sponsorship worker gracefully.
  * Ceases polling, awaits any in-progress job (up to shutdownTimeoutMs),
  * and disconnects the Prisma client.
- * Resolves when all resources are released.
+ * If the poller does not stop within the timeout, force-exits with code 1
+ * so the orchestrator can restart the container.
  * Safe to call even if start() hasn't been called (no-op).
  */
 export async function stop(): Promise<void> {
-  if (!poller) {
-    return
-  }
+  if (!poller) return
 
   const timeoutMs = config?.shutdownTimeoutMs ?? 10000
 
-  // Race poller stop against shutdown timeout
   const pollerStop = poller.stop()
-
-  const timeout = new Promise<void>((resolve) => {
-    setTimeout(resolve, timeoutMs)
+  const timeout = new Promise<'timeout'>((resolve) => {
+    setTimeout(() => resolve('timeout'), timeoutMs)
   })
 
-  await Promise.race([pollerStop, timeout])
+  const result = await Promise.race([
+    pollerStop.then(() => 'done' as const),
+    timeout,
+  ])
 
   await prisma.$disconnect()
   logger.info('Worker stopped')
 
   poller = null
   config = null
+
+  if (result === 'timeout') {
+    logger.error('Shutdown timeout exceeded — force exiting', {
+      timeoutMs,
+    })
+    process.exit(1)
+  }
 }

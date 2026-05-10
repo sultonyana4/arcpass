@@ -83,6 +83,7 @@ model RelayTransaction {
   blockNumber            BigInt?
   eventName              String?                 @db.VarChar(100)
   eventData              Json?
+  explorerUrl            String?                 @db.VarChar(512)
 
   sponsorshipRequest     SponsorshipRequest      @relation(fields: [sponsorshipRequestId], references: [id], onDelete: Restrict)
 

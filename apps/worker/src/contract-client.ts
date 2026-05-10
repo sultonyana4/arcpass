@@ -20,6 +20,7 @@ export interface ContractRelayResult {
   transactionHash: string | null
   blockNumber: bigint | null
   failureReason: string | null
+  explorerUrl: string | null
   eventData: {
     recipient: string
     amount: bigint
@@ -34,6 +35,7 @@ export interface ContractRelayResult {
 let clients: ViemClients | null = null
 let config: ContractConfig | null = null
 let timeoutMs: number = 120_000
+let explorerBaseUrl: string = 'https://testnet.arcscan.io/tx/'
 
 const logger = createLogger('contract-client' as LogEntry['component'])
 
@@ -48,11 +50,24 @@ const logger = createLogger('contract-client' as LogEntry['component'])
 export function initializeContractClient(
   viemClients: ViemClients,
   contractConfig: ContractConfig,
-  configuredTimeoutMs: number
+  configuredTimeoutMs: number,
+  configuredExplorerBaseUrl: string
 ): void {
   clients = viemClients
   config = contractConfig
   timeoutMs = configuredTimeoutMs
+  explorerBaseUrl = configuredExplorerBaseUrl
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds a full explorer URL for a given transaction hash.
+ */
+function buildExplorerUrl(hash: string): string {
+  return `${explorerBaseUrl}${hash}`
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +79,7 @@ export function initializeContractClient(
  */
 export interface RelayContext {
   sponsorshipRequestId?: string
+  relayTransactionId?: string
   relayAttempt?: number
 }
 
@@ -83,6 +99,7 @@ export async function executeContractRelay(
       transactionHash: null,
       blockNumber: null,
       failureReason: 'Contract client not initialized — call initializeContractClient() first',
+      explorerUrl: null,
       eventData: null,
     }
   }
@@ -121,6 +138,7 @@ export async function executeContractRelay(
       relayAttempt: resolvedContext.relayAttempt ?? null,
       transactionHash: hash,
       recipient: recipientAddress,
+      amount: amount.toString(),
     })
 
     // Step 2: Wait for receipt with configured confirmations and timeout
@@ -140,6 +158,7 @@ export async function executeContractRelay(
         transactionHash: hash,
         outcome: 'confirmed',
         blockNumber: receipt.blockNumber.toString(),
+        elapsedMs: Date.now() - startTime,
       })
 
       return {
@@ -147,12 +166,13 @@ export async function executeContractRelay(
         transactionHash: hash,
         blockNumber: receipt.blockNumber,
         failureReason: null,
+        explorerUrl: buildExplorerUrl(hash),
         eventData,
       }
     }
 
     // Step 4: Transaction reverted — decode revert reason
-    const failureReason = decodeRevertReason(receipt, sponsorVaultAbi)
+    const failureReason = truncateReason(decodeRevertReason(receipt, sponsorVaultAbi))
     const elapsedMs = Date.now() - startTime
 
     logger.error('Relay outcome', {
@@ -161,6 +181,7 @@ export async function executeContractRelay(
       transactionHash: hash,
       outcome: 'reverted',
       failureReason,
+      relayStage: 'receipt',
       elapsedMs,
     })
 
@@ -169,6 +190,7 @@ export async function executeContractRelay(
       transactionHash: hash,
       blockNumber: receipt.blockNumber,
       failureReason,
+      explorerUrl: null,
       eventData: null,
     }
   } catch (error) {
@@ -182,6 +204,7 @@ export async function executeContractRelay(
       transactionHash: hash,
       outcome: 'error',
       failureReason: truncateReason(failureReason),
+      relayStage: hash ? 'receipt' : 'broadcast',
       elapsedMs,
     })
 
@@ -190,6 +213,7 @@ export async function executeContractRelay(
       transactionHash: hash,
       blockNumber: null,
       failureReason: truncateReason(failureReason),
+      explorerUrl: null,
       eventData: null,
     }
   }
@@ -262,15 +286,37 @@ export function decodeRevertReason(
 
 /**
  * Handles errors thrown during contract execution (writeContract or waitForTransactionReceipt).
- * Attempts to decode known custom errors from the error data.
+ * Detects specific network error patterns and attempts to decode known custom errors.
  */
-function handleExecutionError(error: unknown, vaultAbi: Abi): string {
+export function handleExecutionError(error: unknown, vaultAbi: Abi): string {
   if (!(error instanceof Error)) {
     return String(error)
   }
 
-  // Check for timeout errors
-  if (error.message.includes('timed out') || error.message.includes('timeout')) {
+  const msg = error.message.toLowerCase()
+
+  // Check for connection timeout/refused errors
+  if (msg.includes('econnrefused') || msg.includes('etimedout') || msg.includes('connect')) {
+    return `Connection error: ${error.message}`
+  }
+
+  // Check for HTTP 429 rate limiting
+  if (msg.includes('429') || msg.includes('rate limit')) {
+    return `RPC rate limited: ${error.message}`
+  }
+
+  // Check for nonce-too-low errors
+  if (msg.includes('nonce')) {
+    return `Nonce error: ${error.message}`
+  }
+
+  // Check for gas estimation failures
+  if (msg.includes('gas')) {
+    return `Gas estimation failed: ${error.message}`
+  }
+
+  // Check for timeout errors (waitForTransactionReceipt timeout)
+  if (msg.includes('timed out') || msg.includes('timeout')) {
     return 'Transaction confirmation timeout'
   }
 
@@ -285,7 +331,8 @@ function handleExecutionError(error: unknown, vaultAbi: Abi): string {
 
       return formatDecodedError(decoded)
     } catch {
-      // Could not decode — fall through to raw message
+      // Error data exists but doesn't match any known selector — use generic revert message
+      return 'Transaction reverted on-chain'
     }
   }
 
@@ -296,7 +343,7 @@ function handleExecutionError(error: unknown, vaultAbi: Abi): string {
  * Extracts hex-encoded error data from a viem contract call error.
  * Viem wraps contract revert data in error objects with various structures.
  */
-function extractErrorData(error: unknown): `0x${string}` | null {
+export function extractErrorData(error: unknown): `0x${string}` | null {
   if (!error || typeof error !== 'object') return null
 
   // viem ContractFunctionRevertedError stores data in error.data
@@ -341,7 +388,7 @@ function extractErrorData(error: unknown): `0x${string}` | null {
 /**
  * Formats a decoded error result into a human-readable string.
  */
-function formatDecodedError(decoded: { errorName: string; args?: readonly unknown[] }): string {
+export function formatDecodedError(decoded: { errorName: string; args?: readonly unknown[] }): string {
   const { errorName, args } = decoded
 
   switch (errorName) {
@@ -374,7 +421,7 @@ function formatDecodedError(decoded: { errorName: string; args?: readonly unknow
 /**
  * Truncates a failure reason string to 1000 characters as required by the spec.
  */
-function truncateReason(reason: string): string {
+export function truncateReason(reason: string): string {
   if (reason.length <= 1000) return reason
   return reason.slice(0, 997) + '...'
 }

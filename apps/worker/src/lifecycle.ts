@@ -80,9 +80,10 @@ export async function transitionSponsorshipStatus(
 }
 
 /**
- * Maximum number of relay attempts allowed per sponsorship request.
+ * Default maximum number of relay attempts allowed per sponsorship request.
+ * Can be overridden by passing maxRelayAttempts to createRelayTransaction.
  */
-const MAX_RELAY_ATTEMPTS = 3
+const DEFAULT_MAX_RELAY_ATTEMPTS = 3
 
 /**
  * Map of relay statuses to their corresponding timestamp fields.
@@ -97,21 +98,22 @@ const RELAY_STATUS_TIMESTAMP_FIELD: Partial<Record<RelayStatusValue, string>> = 
  * Creates a new relay transaction for a sponsorship request.
  *
  * - Sets `relayAttempt` to the previous highest attempt + 1.
- * - Enforces a maximum of 3 relay attempts per request.
+ * - Enforces a configurable maximum of relay attempts per request.
  * - Throws an error if the maximum relay attempts have been reached.
  */
 export async function createRelayTransaction(
   tx: PrismaClient,
-  sponsorshipRequestId: string
+  sponsorshipRequestId: string,
+  maxRelayAttempts: number = DEFAULT_MAX_RELAY_ATTEMPTS
 ): Promise<{ id: string; relayAttempt: number }> {
   // Count existing relay transactions for this request
   const existingCount = await tx.relayTransaction.count({
     where: { sponsorshipRequestId },
   })
 
-  if (existingCount >= MAX_RELAY_ATTEMPTS) {
+  if (existingCount >= maxRelayAttempts) {
     throw new Error(
-      `Maximum relay attempts (${MAX_RELAY_ATTEMPTS}) reached for request ${sponsorshipRequestId}`
+      `Maximum relay attempts (${maxRelayAttempts}) reached for request ${sponsorshipRequestId}`
     )
   }
 
@@ -137,7 +139,7 @@ export async function createRelayTransaction(
  *   - `confirmedAt` on submitted→confirmed
  *   - `failedAt` on →failed
  * - Stores `transactionHash` or `failureReason` from the data param.
- * - Stores `blockNumber`, `eventName`, and `eventData` when provided (for confirmed relays).
+ * - Stores `blockNumber`, `eventName`, `eventData`, and `explorerUrl` when provided (for confirmed relays).
  * - Rejects invalid transitions and preserves existing state.
  */
 export async function updateRelayTransaction(
@@ -150,6 +152,7 @@ export async function updateRelayTransaction(
     blockNumber?: bigint | null
     eventName?: string | null
     eventData?: Record<string, unknown> | null
+    explorerUrl?: string | null
   }
 ): Promise<TransitionResult> {
   const relayTransaction = await tx.relayTransaction.findUnique({
@@ -200,6 +203,9 @@ export async function updateRelayTransaction(
   }
   if (data?.eventData !== undefined) {
     updateData.eventData = data.eventData
+  }
+  if (data?.explorerUrl !== undefined) {
+    updateData.explorerUrl = data.explorerUrl
   }
 
   await tx.relayTransaction.update({

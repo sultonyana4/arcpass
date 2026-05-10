@@ -34,6 +34,7 @@ describe('loadConfig', () => {
     delete process.env.TX_TIMEOUT_MS
     delete process.env.SPONSORSHIP_AMOUNT_WEI
     delete process.env.CHAIN_ID_VERIFY_TIMEOUT_MS
+    delete process.env.EXPLORER_BASE_URL
     mockExit.mockClear()
     mockConsoleError.mockClear()
   })
@@ -127,41 +128,70 @@ describe('loadConfig', () => {
     })
   })
 
+  describe('format validation - reports ALL invalid vars at once', () => {
+    it('reports multiple format errors in a single message', () => {
+      setBaseEnv()
+      process.env.CHAIN_RPC_URL = 'ftp://invalid'
+      process.env.CHAIN_ID = 'abc'
+      process.env.SPONSOR_PRIVATE_KEY = 'short'
+      process.env.CONTRACT_ADDRESS_SPONSOR_VAULT = 'invalid'
+
+      expect(() => loadConfig()).toThrow('process.exit')
+      expect(mockConsoleError).toHaveBeenCalledTimes(1)
+      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(errorMsg).toContain('CHAIN_RPC_URL')
+      expect(errorMsg).toContain('CHAIN_ID')
+      expect(errorMsg).toContain('SPONSOR_PRIVATE_KEY')
+      expect(errorMsg).toContain('CONTRACT_ADDRESS_SPONSOR_VAULT')
+    })
+
+    it('reports both missing and format errors together', () => {
+      // DATABASE_URL is missing, CHAIN_RPC_URL has bad format
+      process.env.CHAIN_RPC_URL = 'ftp://invalid'
+      process.env.SPONSOR_PRIVATE_KEY = 'a'.repeat(64)
+      process.env.CHAIN_ID = '1337'
+      process.env.CONTRACT_ADDRESS_SPONSOR_VAULT = '0x' + 'a'.repeat(40)
+      process.env.CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY = '0x' + 'b'.repeat(40)
+
+      expect(() => loadConfig()).toThrow('process.exit')
+      expect(mockConsoleError).toHaveBeenCalledTimes(1)
+      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(errorMsg).toContain('DATABASE_URL')
+      expect(errorMsg).toContain('CHAIN_RPC_URL')
+    })
+  })
+
   describe('CHAIN_ID validation', () => {
     it('rejects non-integer CHAIN_ID', () => {
       setBaseEnv()
       process.env.CHAIN_ID = '3.14'
       expect(() => loadConfig()).toThrow('process.exit')
-      expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining('CHAIN_ID must be a positive integer')
-      )
+      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(errorMsg).toContain('CHAIN_ID')
     })
 
     it('rejects zero CHAIN_ID', () => {
       setBaseEnv()
       process.env.CHAIN_ID = '0'
       expect(() => loadConfig()).toThrow('process.exit')
-      expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining('CHAIN_ID must be a positive integer')
-      )
+      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(errorMsg).toContain('CHAIN_ID')
     })
 
     it('rejects negative CHAIN_ID', () => {
       setBaseEnv()
       process.env.CHAIN_ID = '-1'
       expect(() => loadConfig()).toThrow('process.exit')
-      expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining('CHAIN_ID must be a positive integer')
-      )
+      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(errorMsg).toContain('CHAIN_ID')
     })
 
     it('rejects non-numeric CHAIN_ID', () => {
       setBaseEnv()
       process.env.CHAIN_ID = 'abc'
       expect(() => loadConfig()).toThrow('process.exit')
-      expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining('CHAIN_ID must be a positive integer')
-      )
+      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(errorMsg).toContain('CHAIN_ID')
     })
   })
 
@@ -170,36 +200,32 @@ describe('loadConfig', () => {
       setBaseEnv()
       process.env.CONTRACT_ADDRESS_SPONSOR_VAULT = 'a'.repeat(42)
       expect(() => loadConfig()).toThrow('process.exit')
-      expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining('CONTRACT_ADDRESS_SPONSOR_VAULT')
-      )
+      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(errorMsg).toContain('CONTRACT_ADDRESS_SPONSOR_VAULT')
     })
 
     it('rejects CONTRACT_ADDRESS_SPONSOR_VAULT with wrong length', () => {
       setBaseEnv()
       process.env.CONTRACT_ADDRESS_SPONSOR_VAULT = '0x' + 'a'.repeat(39)
       expect(() => loadConfig()).toThrow('process.exit')
-      expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining('CONTRACT_ADDRESS_SPONSOR_VAULT')
-      )
+      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(errorMsg).toContain('CONTRACT_ADDRESS_SPONSOR_VAULT')
     })
 
     it('rejects CONTRACT_ADDRESS_SPONSOR_VAULT with invalid hex chars', () => {
       setBaseEnv()
       process.env.CONTRACT_ADDRESS_SPONSOR_VAULT = '0x' + 'g'.repeat(40)
       expect(() => loadConfig()).toThrow('process.exit')
-      expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining('CONTRACT_ADDRESS_SPONSOR_VAULT')
-      )
+      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(errorMsg).toContain('CONTRACT_ADDRESS_SPONSOR_VAULT')
     })
 
     it('rejects CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY with invalid format', () => {
       setBaseEnv()
       process.env.CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY = 'invalid'
       expect(() => loadConfig()).toThrow('process.exit')
-      expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining('CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY')
-      )
+      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(errorMsg).toContain('CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY')
     })
 
     it('accepts valid mixed-case contract addresses', () => {
@@ -215,18 +241,23 @@ describe('loadConfig', () => {
       setBaseEnv()
       process.env.CHAIN_ID_VERIFY_TIMEOUT_MS = '999'
       expect(() => loadConfig()).toThrow('process.exit')
-      expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining('CHAIN_ID_VERIFY_TIMEOUT_MS must be between 1000 and 30000')
-      )
+      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(errorMsg).toContain('CHAIN_ID_VERIFY_TIMEOUT_MS')
     })
 
     it('rejects value above 30000', () => {
       setBaseEnv()
       process.env.CHAIN_ID_VERIFY_TIMEOUT_MS = '30001'
       expect(() => loadConfig()).toThrow('process.exit')
-      expect(mockConsoleError).toHaveBeenCalledWith(
-        expect.stringContaining('CHAIN_ID_VERIFY_TIMEOUT_MS must be between 1000 and 30000')
-      )
+      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(errorMsg).toContain('CHAIN_ID_VERIFY_TIMEOUT_MS')
+    })
+  })
+
+  describe('exits with non-zero code', () => {
+    it('calls process.exit(1) on validation failure', () => {
+      expect(() => loadConfig()).toThrow('process.exit(1)')
+      expect(mockExit).toHaveBeenCalledWith(1)
     })
   })
 })

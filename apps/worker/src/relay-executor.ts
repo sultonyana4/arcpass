@@ -9,6 +9,7 @@ export interface RelayResult {
   transactionHash: string | null
   failureReason: string | null
   blockNumber?: bigint | null
+  explorerUrl?: string | null
   eventData?: {
     recipient: string
     amount: bigint
@@ -52,11 +53,13 @@ export function initializeRelayExecutor(clients: {
  * SponsorVault.sponsorTransfer on-chain.
  *
  * @param sponsorshipRequestId - The ID of the sponsorship request to relay
+ * @param relayTransactionId - The relay transaction ID for structured logging
  * @param relayAttempt - The current relay attempt number (for structured logging)
  * @returns RelayResult with success/failure status and transaction hash
  */
 export async function executeRelay(
   sponsorshipRequestId: string,
+  relayTransactionId: string,
   relayAttempt?: number
 ): Promise<RelayResult> {
   const startTime = Date.now()
@@ -89,6 +92,7 @@ export async function executeRelay(
     // Log relay attempt start with structured fields
     logger.info('Relay attempt starting', {
       sponsorshipRequestId,
+      relayTransactionId,
       relayAttempt: relayAttempt ?? null,
       walletAddress,
     })
@@ -96,6 +100,7 @@ export async function executeRelay(
     // Step 2: Delegate to contract client for on-chain execution
     const contractResult = await executeContractRelay(walletAddress, sponsorshipAmount, {
       sponsorshipRequestId,
+      relayTransactionId,
       relayAttempt,
     })
 
@@ -103,7 +108,9 @@ export async function executeRelay(
     if (contractResult.success) {
       logger.info('Relay execution outcome', {
         sponsorshipRequestId,
+        relayTransactionId,
         relayAttempt: relayAttempt ?? null,
+        walletAddress,
         transactionHash: contractResult.transactionHash,
         outcome: 'confirmed',
         blockNumber: contractResult.blockNumber?.toString() ?? null,
@@ -112,7 +119,9 @@ export async function executeRelay(
       const elapsedMs = Date.now() - startTime
       logger.error('Relay execution outcome', {
         sponsorshipRequestId,
+        relayTransactionId,
         relayAttempt: relayAttempt ?? null,
+        walletAddress,
         transactionHash: contractResult.transactionHash,
         outcome: contractResult.transactionHash ? 'reverted' : 'error',
         failureReason: contractResult.failureReason,
@@ -125,6 +134,7 @@ export async function executeRelay(
       transactionHash: contractResult.transactionHash,
       failureReason: contractResult.failureReason,
       blockNumber: contractResult.blockNumber,
+      explorerUrl: contractResult.explorerUrl,
       eventData: contractResult.eventData,
     }
   } catch (error) {
@@ -133,6 +143,7 @@ export async function executeRelay(
 
     logger.error('Relay execution outcome', {
       sponsorshipRequestId,
+      relayTransactionId,
       relayAttempt: relayAttempt ?? null,
       transactionHash: null,
       outcome: 'error',
@@ -145,6 +156,7 @@ export async function executeRelay(
       transactionHash: null,
       failureReason: message,
       blockNumber: null,
+      explorerUrl: null,
       eventData: null,
     }
   }

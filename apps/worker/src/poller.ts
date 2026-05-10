@@ -28,13 +28,20 @@ export function createPoller(config: WorkerConfig): Poller {
     if (!isRunning) return
 
     try {
-      // Query pending requests ordered by requestedAt ASC, limited by batch size.
+      // Query pending requests AND stale relayed requests ordered by requestedAt ASC.
+      // Stale relayed requests are those with no active relay transaction (submitted/confirmed),
+      // which can occur after a crash. This enables recovery on the next poll cycle (Req 9.3).
       // The processor handles row-level locking internally via SELECT FOR UPDATE SKIP LOCKED,
       // which satisfies Requirement 5.5 (skip locked rows).
       const pendingRequests = await prisma.$queryRaw<Array<{ id: string }>>`
-        SELECT id FROM "sponsorship_requests"
-        WHERE status = 'pending'
-        ORDER BY "requestedAt" ASC
+        SELECT sr.id FROM "sponsorship_requests" sr
+        WHERE sr.status = 'pending'
+           OR (sr.status = 'relayed' AND NOT EXISTS (
+             SELECT 1 FROM "relay_transactions" rt
+             WHERE rt."sponsorshipRequestId" = sr.id
+               AND rt.status IN ('submitted', 'confirmed')
+           ))
+        ORDER BY sr."requestedAt" ASC
         LIMIT ${config.batchSize}
       `
 
