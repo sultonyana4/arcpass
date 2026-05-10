@@ -33,6 +33,12 @@ contract SponsorVault {
     /// @notice Thrown when an invalid amount is provided
     error InvalidAmount();
 
+    /// @notice Thrown when the registry has already been initialized
+    error RegistryAlreadyInitialized();
+
+    /// @notice Thrown when the registry has not been initialized yet
+    error RegistryNotInitialized();
+
     // ─── Events ──────────────────────────────────────────────────────────────────
 
     /// @notice Emitted when a sponsorship transfer is executed
@@ -49,6 +55,10 @@ contract SponsorVault {
     /// @param previousLimit The previous limit
     /// @param newLimit The new limit
     event PerTransactionLimitUpdated(uint256 previousLimit, uint256 newLimit);
+
+    /// @notice Emitted when the registry address is set
+    /// @param registry The address of the SponsorshipRegistry contract
+    event RegistryUpdated(address indexed registry);
 
     /// @notice Emitted when an emergency withdrawal is executed
     /// @param to The address that received the withdrawn funds
@@ -72,18 +82,30 @@ contract SponsorVault {
     // ─── Constructor ─────────────────────────────────────────────────────────────
 
     /// @notice Deploys the SponsorVault
-    /// @param _registry Address of the SponsorshipRegistry contract
+    /// @dev Registry is set separately via initializeRegistry() to break circular dependency.
     /// @param _operator Initial operator address
     /// @param _perTransactionLimit Initial per-transaction limit in wei
-    constructor(address _registry, address _operator, uint256 _perTransactionLimit) {
-        if (_registry == address(0)) revert InvalidRecipient();
+    constructor(address _operator, uint256 _perTransactionLimit) {
         if (_operator == address(0)) revert InvalidRecipient();
         if (_perTransactionLimit == 0) revert InvalidAmount();
 
         owner = msg.sender;
-        registry = ISponsorshipRegistry(_registry);
         operator = _operator;
         perTransactionLimit = _perTransactionLimit;
+    }
+
+    // ─── Initialization ──────────────────────────────────────────────────────────
+
+    /// @notice Sets the SponsorshipRegistry address. Can only be called once by the owner.
+    /// @dev This breaks the circular constructor dependency between Vault and Registry.
+    /// @param _registry Address of the deployed SponsorshipRegistry contract
+    function initializeRegistry(address _registry) external onlyOwner {
+        if (address(registry) != address(0)) revert RegistryAlreadyInitialized();
+        if (_registry == address(0)) revert InvalidRecipient();
+
+        registry = ISponsorshipRegistry(_registry);
+
+        emit RegistryUpdated(_registry);
     }
 
     // ─── Modifiers ───────────────────────────────────────────────────────────────
@@ -103,12 +125,13 @@ contract SponsorVault {
     // ─── Operator Functions ──────────────────────────────────────────────────────
 
     /// @notice Executes a sponsorship transfer to a recipient
-    /// @dev Checks: caller == operator, amount <= perTransactionLimit,
+    /// @dev Checks: caller == operator, registry initialized, amount <= perTransactionLimit,
     ///      balance >= amount, registry.sponsorshipCount(recipient) == 0.
     ///      Calls registry.recordSponsorship BEFORE transferring funds.
     /// @param recipient The address to receive the sponsorship
     /// @param amount The amount of native tokens to transfer
     function sponsorTransfer(address recipient, uint256 amount) external onlyOperator {
+        if (address(registry) == address(0)) revert RegistryNotInitialized();
         if (recipient == address(0)) revert InvalidRecipient();
         if (amount == 0) revert InvalidAmount();
         if (amount > perTransactionLimit) revert ExceedsLimit(amount, perTransactionLimit);
