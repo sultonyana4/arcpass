@@ -1,5 +1,7 @@
-import { registerWallet, lookupWallet } from '../services/wallet.service.js'
+import { registerWallet, lookupWallet, getWalletHistory } from '../services/wallet.service.js'
 import { WalletNotFoundError } from '../lib/errors.js'
+import { isValidWalletAddress } from '../lib/wallet-validation.js'
+import { ValidationError } from '../lib/errors.js'
 
 const registerSchema = {
   body: {
@@ -19,6 +21,24 @@ const lookupSchema = {
     properties: {
       address: { type: 'string' },
     },
+  },
+}
+
+const historySchema = {
+  params: {
+    type: 'object',
+    required: ['address'],
+    properties: {
+      address: { type: 'string' },
+    },
+  },
+  querystring: {
+    type: 'object',
+    properties: {
+      cursor: { type: 'string', format: 'uuid' },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+    },
+    additionalProperties: false,
   },
 }
 
@@ -50,5 +70,21 @@ export default async function walletRoutes(fastify, opts) {
     }
 
     return reply.status(200).send(formatWalletResponse(wallet))
+  })
+
+  fastify.get('/:address/history', { schema: historySchema }, async (request, reply) => {
+    const { address } = request.params
+    const { cursor, limit } = request.query || {}
+
+    if (!isValidWalletAddress(address)) {
+      throw new ValidationError('Invalid wallet address format')
+    }
+
+    const result = await getWalletHistory(address, {
+      cursor: cursor || null,
+      limit: limit || 50,
+    })
+
+    return reply.status(200).send(result)
   })
 }

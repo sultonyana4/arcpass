@@ -1,7 +1,7 @@
-import { parseEther } from 'viem'
 import type { PublicClient, WalletClient, Account } from 'viem'
 import { prisma } from '@arcpass/shared'
 import { createLogger } from './logger.js'
+import { executeContractRelay } from './contract-client.js'
 import type { WorkerConfig } from './config.js'
 
 export interface RelayResult {
@@ -9,6 +9,11 @@ export interface RelayResult {
   transactionHash: string | null
   failureReason: string | null
   blockNumber?: bigint | null
+  eventData?: {
+    recipient: string
+    amount: bigint
+    timestamp: bigint
+  } | null
 }
 
 const logger = createLogger('relay-executor')
@@ -22,9 +27,7 @@ let publicClient: PublicClient | null = null
 let account: Account | null = null
 let confirmationBlocks = 2
 let txTimeoutMs = 120000
-
-/** Default sponsorship amount: 0.001 native token */
-const SPONSORSHIP_AMOUNT = parseEther('0.001')
+let sponsorshipAmount: bigint = 1000000000000000n // 0.001 ETH default
 
 /**
  * Initializes the relay executor with viem clients and configuration.
@@ -34,27 +37,29 @@ export function initializeRelayExecutor(clients: {
   publicClient: PublicClient
   walletClient: WalletClient
   account: Account
-}, config: Pick<WorkerConfig, 'confirmationBlocks' | 'txTimeoutMs'>): void {
+}, config: Pick<WorkerConfig, 'confirmationBlocks' | 'txTimeoutMs' | 'sponsorshipAmount'>): void {
   publicClient = clients.publicClient
   walletClient = clients.walletClient
   account = clients.account
   confirmationBlocks = config.confirmationBlocks
   txTimeoutMs = config.txTimeoutMs
+  sponsorshipAmount = config.sponsorshipAmount
 }
 
 /**
  * Executes a real blockchain relay for a sponsorship request.
- * Drop-in replacement for simulateRelay.
+ * Delegates to the contract integration layer (executeContractRelay) which calls
+ * SponsorVault.sponsorTransfer on-chain.
  *
  * @param sponsorshipRequestId - The ID of the sponsorship request to relay
- * @param _failureRate - Accepted for API compatibility, ignored
+ * @param relayAttempt - The current relay attempt number (for structured logging)
  * @returns RelayResult with success/failure status and transaction hash
  */
 export async function executeRelay(
   sponsorshipRequestId: string,
-  _failureRate?: number
+  relayAttempt?: number
 ): Promise<RelayResult> {
-  let pendingHash: string | null = null
+  const startTime = Date.now()
 
   try {
     if (!walletClient || !publicClient || !account) {
@@ -81,76 +86,66 @@ export async function executeRelay(
 
     const walletAddress = request.wallet.walletAddress as `0x${string}`
 
-    // Step 2: Construct and broadcast native token transfer
-    logger.info('Broadcasting transaction', {
+    // Log relay attempt start with structured fields
+    logger.info('Relay attempt starting', {
       sponsorshipRequestId,
+      relayAttempt: relayAttempt ?? null,
       walletAddress,
     })
 
-    const hash = await walletClient.sendTransaction({
-      account,
-      chain: null,
-      to: walletAddress,
-      value: SPONSORSHIP_AMOUNT,
-    })
-
-    pendingHash = hash
-
-    logger.info('Transaction broadcast successful', {
+    // Step 2: Delegate to contract client for on-chain execution
+    const contractResult = await executeContractRelay(walletAddress, sponsorshipAmount, {
       sponsorshipRequestId,
-      transactionHash: hash,
+      relayAttempt,
     })
 
-    // Step 3: Wait for transaction receipt with configured confirmations and timeout
-    const receipt = await publicClient.waitForTransactionReceipt({
-      hash,
-      confirmations: confirmationBlocks,
-      timeout: txTimeoutMs,
-    })
-
-    // Step 4: Map receipt status to RelayResult
-    if (receipt.status === 'success') {
-      logger.info('Transaction confirmed', {
-        transactionHash: hash,
-        blockNumber: receipt.blockNumber.toString(),
-        confirmations: confirmationBlocks,
-      })
-
-      return {
-        success: true,
-        transactionHash: hash,
-        failureReason: null,
-        blockNumber: receipt.blockNumber,
-      }
-    } else {
-      // status === 'reverted'
-      logger.error('Transaction reverted', {
+    // Step 3: Map ContractRelayResult to RelayResult and log outcome
+    if (contractResult.success) {
+      logger.info('Relay execution outcome', {
         sponsorshipRequestId,
-        transactionHash: hash,
-        blockNumber: receipt.blockNumber.toString(),
+        relayAttempt: relayAttempt ?? null,
+        transactionHash: contractResult.transactionHash,
+        outcome: 'confirmed',
+        blockNumber: contractResult.blockNumber?.toString() ?? null,
       })
+    } else {
+      const elapsedMs = Date.now() - startTime
+      logger.error('Relay execution outcome', {
+        sponsorshipRequestId,
+        relayAttempt: relayAttempt ?? null,
+        transactionHash: contractResult.transactionHash,
+        outcome: contractResult.transactionHash ? 'reverted' : 'error',
+        failureReason: contractResult.failureReason,
+        elapsedMs,
+      })
+    }
 
-      return {
-        success: false,
-        transactionHash: hash,
-        failureReason: 'transaction reverted',
-        blockNumber: receipt.blockNumber,
-      }
+    return {
+      success: contractResult.success,
+      transactionHash: contractResult.transactionHash,
+      failureReason: contractResult.failureReason,
+      blockNumber: contractResult.blockNumber,
+      eventData: contractResult.eventData,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    const elapsedMs = Date.now() - startTime
 
-    logger.error('Relay execution failed', {
+    logger.error('Relay execution outcome', {
       sponsorshipRequestId,
+      relayAttempt: relayAttempt ?? null,
+      transactionHash: null,
+      outcome: 'error',
       failureReason: message,
-      transactionHash: pendingHash,
+      elapsedMs,
     })
 
     return {
       success: false,
-      transactionHash: pendingHash,
+      transactionHash: null,
       failureReason: message,
       blockNumber: null,
+      eventData: null,
     }
   }
 }

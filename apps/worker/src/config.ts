@@ -11,13 +11,40 @@ export interface WorkerConfig {
   shutdownTimeoutMs: number
   confirmationBlocks: number
   txTimeoutMs: number
+
+  // New fields for MVP
+  chainId: number
+  contractAddressSponsorVault: `0x${string}`
+  contractAddressSponsorshipRegistry: `0x${string}`
+  sponsorshipAmount: bigint
+  chainIdVerifyTimeoutMs: number
 }
 
+const CONTRACT_ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/
+
 export function loadConfig(): WorkerConfig {
-  // Validate all required environment variables first
-  const databaseUrl = requireEnv('DATABASE_URL')
-  const chainRpcUrl = requireEnv('CHAIN_RPC_URL')
-  const sponsorPrivateKey = requireEnv('SPONSOR_PRIVATE_KEY')
+  // Collect all missing required environment variables
+  const requiredVars = [
+    'DATABASE_URL',
+    'CHAIN_RPC_URL',
+    'SPONSOR_PRIVATE_KEY',
+    'CHAIN_ID',
+    'CONTRACT_ADDRESS_SPONSOR_VAULT',
+    'CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY',
+  ] as const
+
+  const missing = requiredVars.filter((name) => !process.env[name])
+  if (missing.length > 0) {
+    console.error(`Missing required environment variables: ${missing.join(', ')}`)
+    process.exit(1)
+  }
+
+  const databaseUrl = process.env.DATABASE_URL!
+  const chainRpcUrl = process.env.CHAIN_RPC_URL!
+  const sponsorPrivateKey = process.env.SPONSOR_PRIVATE_KEY!
+  const chainIdRaw = process.env.CHAIN_ID!
+  const contractAddressSponsorVault = process.env.CONTRACT_ADDRESS_SPONSOR_VAULT!
+  const contractAddressSponsorshipRegistry = process.env.CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY!
 
   // Format validation for chainRpcUrl
   if (!chainRpcUrl.startsWith('http://') && !chainRpcUrl.startsWith('https://')) {
@@ -34,6 +61,30 @@ export function loadConfig(): WorkerConfig {
   if (!/^[0-9a-fA-F]{64}$/.test(keyWithoutPrefix)) {
     console.error(
       'Invalid environment variable: SPONSOR_PRIVATE_KEY must be a 64-character hexadecimal string (with or without 0x prefix)'
+    )
+    process.exit(1)
+  }
+
+  // Validate CHAIN_ID is a positive integer
+  const chainId = Number(chainIdRaw)
+  if (!Number.isInteger(chainId) || chainId <= 0) {
+    console.error(
+      'Invalid environment variable: CHAIN_ID must be a positive integer'
+    )
+    process.exit(1)
+  }
+
+  // Validate contract address formats
+  if (!CONTRACT_ADDRESS_PATTERN.test(contractAddressSponsorVault)) {
+    console.error(
+      'Invalid environment variable: CONTRACT_ADDRESS_SPONSOR_VAULT must be a 42-character hex address (0x followed by 40 hex characters)'
+    )
+    process.exit(1)
+  }
+
+  if (!CONTRACT_ADDRESS_PATTERN.test(contractAddressSponsorshipRegistry)) {
+    console.error(
+      'Invalid environment variable: CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY must be a 42-character hex address (0x followed by 40 hex characters)'
     )
     process.exit(1)
   }
@@ -60,6 +111,13 @@ export function loadConfig(): WorkerConfig {
   const txTimeoutMs = parseNumericEnv('TX_TIMEOUT_MS', 120000)
   validateRange('TX_TIMEOUT_MS', txTimeoutMs, 10000, 600000)
 
+  // Parse optional sponsorship amount (defaults to 0.001 ETH in wei)
+  const sponsorshipAmount = parseBigIntEnv('SPONSORSHIP_AMOUNT_WEI', 1000000000000000n)
+
+  // Parse optional chain ID verify timeout
+  const chainIdVerifyTimeoutMs = parseNumericEnv('CHAIN_ID_VERIFY_TIMEOUT_MS', 10000)
+  validateRange('CHAIN_ID_VERIFY_TIMEOUT_MS', chainIdVerifyTimeoutMs, 1000, 30000)
+
   return {
     databaseUrl,
     chainRpcUrl,
@@ -71,16 +129,12 @@ export function loadConfig(): WorkerConfig {
     shutdownTimeoutMs,
     confirmationBlocks,
     txTimeoutMs,
+    chainId,
+    contractAddressSponsorVault: contractAddressSponsorVault as `0x${string}`,
+    contractAddressSponsorshipRegistry: contractAddressSponsorshipRegistry as `0x${string}`,
+    sponsorshipAmount,
+    chainIdVerifyTimeoutMs,
   }
-}
-
-function requireEnv(name: string): string {
-  const value = process.env[name]
-  if (!value) {
-    console.error(`Missing required environment variable: ${name}`)
-    process.exit(1)
-  }
-  return value
 }
 
 function parseNumericEnv(name: string, defaultValue: number): number {
@@ -96,6 +150,25 @@ function parseNumericEnv(name: string, defaultValue: number): number {
   }
 
   return parsed
+}
+
+function parseBigIntEnv(name: string, defaultValue: bigint): bigint {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') {
+    return defaultValue
+  }
+
+  try {
+    const parsed = BigInt(raw)
+    if (parsed <= 0n) {
+      console.error(`Invalid environment variable: ${name} must be a positive integer, got "${raw}"`)
+      process.exit(1)
+    }
+    return parsed
+  } catch {
+    console.error(`Invalid environment variable: ${name} must be a valid integer, got "${raw}"`)
+    process.exit(1)
+  }
 }
 
 function validateRange(name: string, value: number, min: number, max: number): void {

@@ -79,6 +79,11 @@ model RelayTransaction {
   failedAt              DateTime?
   failureReason          String?                 @db.VarChar(1000)
 
+  // Blockchain event data from confirmed relay transactions
+  blockNumber            BigInt?
+  eventName              String?                 @db.VarChar(100)
+  eventData              Json?
+
   sponsorshipRequest     SponsorshipRequest      @relation(fields: [sponsorshipRequestId], references: [id], onDelete: Restrict)
 
   @@index([sponsorshipRequestId])

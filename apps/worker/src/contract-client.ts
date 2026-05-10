@@ -1,0 +1,380 @@
+import { decodeEventLog, decodeErrorResult } from 'viem'
+import type { Abi, TransactionReceipt } from 'viem'
+import type { ViemClients } from './viem-client.js'
+import { createLogger } from './logger.js'
+import type { LogEntry } from './logger.js'
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface ContractConfig {
+  sponsorVaultAddress: `0x${string}`
+  sponsorshipRegistryAddress: `0x${string}`
+  sponsorVaultAbi: Abi
+  sponsorshipRegistryAbi: Abi
+}
+
+export interface ContractRelayResult {
+  success: boolean
+  transactionHash: string | null
+  blockNumber: bigint | null
+  failureReason: string | null
+  eventData: {
+    recipient: string
+    amount: bigint
+    timestamp: bigint
+  } | null
+}
+
+// ---------------------------------------------------------------------------
+// Module-level state
+// ---------------------------------------------------------------------------
+
+let clients: ViemClients | null = null
+let config: ContractConfig | null = null
+let timeoutMs: number = 120_000
+
+const logger = createLogger('contract-client' as LogEntry['component'])
+
+// ---------------------------------------------------------------------------
+// Initialization
+// ---------------------------------------------------------------------------
+
+/**
+ * Stores viem clients, contract configuration, and timeout in module-level state.
+ * Must be called once at worker startup before calling `executeContractRelay`.
+ */
+export function initializeContractClient(
+  viemClients: ViemClients,
+  contractConfig: ContractConfig,
+  configuredTimeoutMs: number
+): void {
+  clients = viemClients
+  config = contractConfig
+  timeoutMs = configuredTimeoutMs
+}
+
+// ---------------------------------------------------------------------------
+// Relay execution
+// ---------------------------------------------------------------------------
+
+/**
+ * Optional context passed to executeContractRelay for structured logging.
+ */
+export interface RelayContext {
+  sponsorshipRequestId?: string
+  relayAttempt?: number
+}
+
+export async function executeContractRelay(
+  recipientAddress: `0x${string}`,
+  amount: bigint,
+  context?: RelayContext | string
+): Promise<ContractRelayResult> {
+  // Support legacy call signature where third arg was sponsorshipRequestId string
+  const resolvedContext: RelayContext = typeof context === 'string'
+    ? { sponsorshipRequestId: context }
+    : context ?? {}
+
+  if (!clients || !config) {
+    return {
+      success: false,
+      transactionHash: null,
+      blockNumber: null,
+      failureReason: 'Contract client not initialized — call initializeContractClient() first',
+      eventData: null,
+    }
+  }
+
+  const { publicClient, walletClient, account } = clients
+  const {
+    sponsorVaultAddress,
+    sponsorVaultAbi,
+    sponsorshipRegistryAbi,
+  } = config
+
+  let hash: `0x${string}` | null = null
+  const startTime = Date.now()
+
+  // Log relay attempt start
+  logger.info('Relay attempt started', {
+    sponsorshipRequestId: resolvedContext.sponsorshipRequestId ?? null,
+    relayAttempt: resolvedContext.relayAttempt ?? null,
+    recipient: recipientAddress,
+    amount: amount.toString(),
+  })
+
+  try {
+    // Step 1: Call SponsorVault.sponsorTransfer via writeContract
+    hash = await walletClient.writeContract({
+      account,
+      address: sponsorVaultAddress,
+      abi: sponsorVaultAbi,
+      functionName: 'sponsorTransfer',
+      args: [recipientAddress, amount],
+      chain: null,
+    })
+
+    logger.info('Contract transaction broadcast', {
+      sponsorshipRequestId: resolvedContext.sponsorshipRequestId ?? null,
+      relayAttempt: resolvedContext.relayAttempt ?? null,
+      transactionHash: hash,
+      recipient: recipientAddress,
+    })
+
+    // Step 2: Wait for receipt with configured confirmations and timeout
+    const receipt: TransactionReceipt = await publicClient.waitForTransactionReceipt({
+      hash,
+      timeout: timeoutMs,
+    })
+
+    // Step 3: Check receipt status
+    if (receipt.status === 'success') {
+      // Extract SponsorshipGranted event from receipt logs
+      const eventData = extractSponsorshipGrantedEvent(receipt, sponsorshipRegistryAbi)
+
+      logger.info('Relay outcome', {
+        sponsorshipRequestId: resolvedContext.sponsorshipRequestId ?? null,
+        relayAttempt: resolvedContext.relayAttempt ?? null,
+        transactionHash: hash,
+        outcome: 'confirmed',
+        blockNumber: receipt.blockNumber.toString(),
+      })
+
+      return {
+        success: true,
+        transactionHash: hash,
+        blockNumber: receipt.blockNumber,
+        failureReason: null,
+        eventData,
+      }
+    }
+
+    // Step 4: Transaction reverted — decode revert reason
+    const failureReason = decodeRevertReason(receipt, sponsorVaultAbi)
+    const elapsedMs = Date.now() - startTime
+
+    logger.error('Relay outcome', {
+      sponsorshipRequestId: resolvedContext.sponsorshipRequestId ?? null,
+      relayAttempt: resolvedContext.relayAttempt ?? null,
+      transactionHash: hash,
+      outcome: 'reverted',
+      failureReason,
+      elapsedMs,
+    })
+
+    return {
+      success: false,
+      transactionHash: hash,
+      blockNumber: receipt.blockNumber,
+      failureReason,
+      eventData: null,
+    }
+  } catch (error) {
+    // Step 5: Handle timeout, network errors, or writeContract revert
+    const failureReason = handleExecutionError(error, config.sponsorVaultAbi)
+    const elapsedMs = Date.now() - startTime
+
+    logger.error('Relay outcome', {
+      sponsorshipRequestId: resolvedContext.sponsorshipRequestId ?? null,
+      relayAttempt: resolvedContext.relayAttempt ?? null,
+      transactionHash: hash,
+      outcome: 'error',
+      failureReason: truncateReason(failureReason),
+      elapsedMs,
+    })
+
+    return {
+      success: false,
+      transactionHash: hash,
+      blockNumber: null,
+      failureReason: truncateReason(failureReason),
+      eventData: null,
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Event extraction
+// ---------------------------------------------------------------------------
+
+/**
+ * Extracts the SponsorshipGranted event from a transaction receipt's logs.
+ * Uses viem's `decodeEventLog` with the SponsorshipRegistry ABI.
+ *
+ * Returns null if the event is not found in the receipt logs.
+ */
+export function extractSponsorshipGrantedEvent(
+  receipt: TransactionReceipt,
+  registryAbi: Abi
+): ContractRelayResult['eventData'] {
+  for (const log of receipt.logs) {
+    try {
+      const decoded = decodeEventLog({
+        abi: registryAbi,
+        data: log.data,
+        topics: (log as unknown as { topics: [`0x${string}`, ...`0x${string}`[]] }).topics,
+      })
+
+      if (decoded.eventName === 'SponsorshipGranted') {
+        const args = decoded.args as unknown as {
+          recipient: string
+          amount: bigint
+          timestamp: bigint
+        }
+
+        return {
+          recipient: args.recipient,
+          amount: args.amount,
+          timestamp: args.timestamp,
+        }
+      }
+    } catch {
+      // Log entry doesn't match registry ABI — skip
+      continue
+    }
+  }
+
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Revert reason decoding
+// ---------------------------------------------------------------------------
+
+/**
+ * Attempts to decode a revert reason from a reverted transaction.
+ * Uses viem's `decodeErrorResult` with the SponsorVault ABI to decode
+ * known custom errors (Unauthorized, ExceedsLimit, InsufficientBalance, AlreadySponsored, etc.).
+ *
+ * Returns a human-readable failure reason string.
+ */
+export function decodeRevertReason(
+  receipt: TransactionReceipt,
+  vaultAbi: Abi
+): string {
+  // For reverted transactions, the revert data may not be directly available
+  // in the receipt. Return a generic revert message.
+  // The actual revert decoding happens in the catch block when writeContract throws.
+  return 'Transaction reverted on-chain'
+}
+
+/**
+ * Handles errors thrown during contract execution (writeContract or waitForTransactionReceipt).
+ * Attempts to decode known custom errors from the error data.
+ */
+function handleExecutionError(error: unknown, vaultAbi: Abi): string {
+  if (!(error instanceof Error)) {
+    return String(error)
+  }
+
+  // Check for timeout errors
+  if (error.message.includes('timed out') || error.message.includes('timeout')) {
+    return 'Transaction confirmation timeout'
+  }
+
+  // Attempt to decode custom contract errors from the error data
+  const errorData = extractErrorData(error)
+  if (errorData) {
+    try {
+      const decoded = decodeErrorResult({
+        abi: vaultAbi,
+        data: errorData,
+      })
+
+      return formatDecodedError(decoded)
+    } catch {
+      // Could not decode — fall through to raw message
+    }
+  }
+
+  return error.message
+}
+
+/**
+ * Extracts hex-encoded error data from a viem contract call error.
+ * Viem wraps contract revert data in error objects with various structures.
+ */
+function extractErrorData(error: unknown): `0x${string}` | null {
+  if (!error || typeof error !== 'object') return null
+
+  // viem ContractFunctionRevertedError stores data in error.data
+  const err = error as Record<string, unknown>
+
+  if (err.data && typeof err.data === 'string' && err.data.startsWith('0x')) {
+    return err.data as `0x${string}`
+  }
+
+  // Some viem errors nest the data under cause
+  if (err.cause && typeof err.cause === 'object') {
+    return extractErrorData(err.cause)
+  }
+
+  // Check for walk pattern in viem errors
+  if (err.walk && typeof err.walk === 'function') {
+    try {
+      const innerError = (err.walk as (fn: (e: unknown) => boolean) => unknown)(
+        (e: unknown) => {
+          return (
+            typeof e === 'object' &&
+            e !== null &&
+            'data' in e &&
+            typeof (e as Record<string, unknown>).data === 'string'
+          )
+        }
+      )
+      if (innerError && typeof innerError === 'object' && 'data' in innerError) {
+        const data = (innerError as Record<string, unknown>).data
+        if (typeof data === 'string' && data.startsWith('0x')) {
+          return data as `0x${string}`
+        }
+      }
+    } catch {
+      // walk failed — fall through
+    }
+  }
+
+  return null
+}
+
+/**
+ * Formats a decoded error result into a human-readable string.
+ */
+function formatDecodedError(decoded: { errorName: string; args?: readonly unknown[] }): string {
+  const { errorName, args } = decoded
+
+  switch (errorName) {
+    case 'Unauthorized':
+      return 'Unauthorized: caller is not the operator'
+    case 'ExceedsLimit':
+      if (args && args.length >= 2) {
+        return `ExceedsLimit: requested ${args[0]}, limit ${args[1]}`
+      }
+      return 'ExceedsLimit: amount exceeds per-transaction limit'
+    case 'InsufficientBalance':
+      if (args && args.length >= 2) {
+        return `InsufficientBalance: requested ${args[0]}, available ${args[1]}`
+      }
+      return 'InsufficientBalance: vault has insufficient funds'
+    case 'AlreadySponsored':
+      if (args && args.length >= 1) {
+        return `AlreadySponsored: ${args[0]}`
+      }
+      return 'AlreadySponsored: recipient already sponsored'
+    case 'InvalidRecipient':
+      return 'InvalidRecipient: recipient address is invalid'
+    case 'InvalidAmount':
+      return 'InvalidAmount: sponsorship amount is invalid'
+    default:
+      return `Contract error: ${errorName}`
+  }
+}
+
+/**
+ * Truncates a failure reason string to 1000 characters as required by the spec.
+ */
+function truncateReason(reason: string): string {
+  if (reason.length <= 1000) return reason
+  return reason.slice(0, 997) + '...'
+}

@@ -120,12 +120,13 @@ describe('sponsorship.service', () => {
   })
 
   describe('getSponsorshipRequest', () => {
-    it('returns sponsorship request with wallet info when found', async () => {
+    it('returns sponsorship request with wallet info and relay transactions when found', async () => {
       const mockRequest = {
         id: 'req-uuid-1',
         walletId: 'wallet-uuid-1',
         status: 'pending',
         wallet: { id: 'wallet-uuid-1', walletAddress: '0xabc123' },
+        relayTransactions: [],
       }
       prisma.sponsorshipRequest.findUnique.mockResolvedValue(mockRequest)
 
@@ -133,7 +134,22 @@ describe('sponsorship.service', () => {
 
       expect(prisma.sponsorshipRequest.findUnique).toHaveBeenCalledWith({
         where: { id: 'req-uuid-1' },
-        include: { wallet: true },
+        include: {
+          wallet: true,
+          relayTransactions: {
+            orderBy: { relayAttempt: 'asc' },
+            select: {
+              id: true,
+              status: true,
+              relayAttempt: true,
+              transactionHash: true,
+              submittedAt: true,
+              confirmedAt: true,
+              failedAt: true,
+              failureReason: true,
+            },
+          },
+        },
       })
       expect(result).toEqual(mockRequest)
     })

@@ -1,4 +1,5 @@
 import { createSponsorshipRequest, getSponsorshipRequest } from '../services/sponsorship.service.js'
+import { getRelayTransactionByHash } from '../services/relay.service.js'
 import { normalizeWalletAddress } from '../lib/wallet-validation.js'
 
 const createRequestSchema = {
@@ -22,6 +23,16 @@ const getRequestSchema = {
   },
 }
 
+const getTxByHashSchema = {
+  params: {
+    type: 'object',
+    required: ['hash'],
+    properties: {
+      hash: { type: 'string', minLength: 1, maxLength: 255 },
+    },
+  },
+}
+
 export default async function sponsorshipRoutes(fastify, opts) {
   fastify.post('/request', { schema: createRequestSchema }, async (request, reply) => {
     const walletAddress = normalizeWalletAddress(request.body.walletAddress)
@@ -35,6 +46,12 @@ export default async function sponsorshipRoutes(fastify, opts) {
     })
 
     return reply.status(201).send(sponsorshipRequest)
+  })
+
+  fastify.get('/tx/:hash', { schema: getTxByHashSchema }, async (request, reply) => {
+    const { hash } = request.params
+    const result = await getRelayTransactionByHash(hash)
+    return reply.status(200).send(result)
   })
 
   fastify.get('/:id', { schema: getRequestSchema }, async (request, reply) => {

@@ -1,0 +1,211 @@
+/**
+ * Contract ABI exports for use with viem.
+ *
+ * These ABIs are extracted from the compiled Foundry artifacts
+ * (contracts/out/) and exported as typed constants for full
+ * type inference in viem's readContract/writeContract calls.
+ */
+
+export const sponsorVaultAbi = [
+  {
+    type: 'constructor',
+    inputs: [
+      { name: '_registry', type: 'address', internalType: 'address' },
+      { name: '_operator', type: 'address', internalType: 'address' },
+      { name: '_perTransactionLimit', type: 'uint256', internalType: 'uint256' },
+    ],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'receive',
+    stateMutability: 'payable',
+  },
+  {
+    type: 'function',
+    name: 'emergencyWithdraw',
+    inputs: [
+      { name: 'to', type: 'address', internalType: 'address' },
+      { name: 'amount', type: 'uint256', internalType: 'uint256' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'operator',
+    inputs: [],
+    outputs: [{ name: '', type: 'address', internalType: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'owner',
+    inputs: [],
+    outputs: [{ name: '', type: 'address', internalType: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'perTransactionLimit',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256', internalType: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'registry',
+    inputs: [],
+    outputs: [{ name: '', type: 'address', internalType: 'contract ISponsorshipRegistry' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'setOperator',
+    inputs: [{ name: 'newOperator', type: 'address', internalType: 'address' }],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'setPerTransactionLimit',
+    inputs: [{ name: 'limit', type: 'uint256', internalType: 'uint256' }],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'sponsorTransfer',
+    inputs: [
+      { name: 'recipient', type: 'address', internalType: 'address' },
+      { name: 'amount', type: 'uint256', internalType: 'uint256' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'event',
+    name: 'EmergencyWithdrawal',
+    inputs: [
+      { name: 'to', type: 'address', indexed: true, internalType: 'address' },
+      { name: 'amount', type: 'uint256', indexed: false, internalType: 'uint256' },
+    ],
+    anonymous: false,
+  },
+  {
+    type: 'event',
+    name: 'OperatorUpdated',
+    inputs: [
+      { name: 'previousOperator', type: 'address', indexed: true, internalType: 'address' },
+      { name: 'newOperator', type: 'address', indexed: true, internalType: 'address' },
+    ],
+    anonymous: false,
+  },
+  {
+    type: 'event',
+    name: 'PerTransactionLimitUpdated',
+    inputs: [
+      { name: 'previousLimit', type: 'uint256', indexed: false, internalType: 'uint256' },
+      { name: 'newLimit', type: 'uint256', indexed: false, internalType: 'uint256' },
+    ],
+    anonymous: false,
+  },
+  {
+    type: 'event',
+    name: 'SponsorshipExecuted',
+    inputs: [
+      { name: 'recipient', type: 'address', indexed: true, internalType: 'address' },
+      { name: 'amount', type: 'uint256', indexed: false, internalType: 'uint256' },
+    ],
+    anonymous: false,
+  },
+  {
+    type: 'error',
+    name: 'AlreadySponsored',
+    inputs: [{ name: 'recipient', type: 'address', internalType: 'address' }],
+  },
+  {
+    type: 'error',
+    name: 'ExceedsLimit',
+    inputs: [
+      { name: 'requested', type: 'uint256', internalType: 'uint256' },
+      { name: 'limit', type: 'uint256', internalType: 'uint256' },
+    ],
+  },
+  {
+    type: 'error',
+    name: 'InsufficientBalance',
+    inputs: [
+      { name: 'requested', type: 'uint256', internalType: 'uint256' },
+      { name: 'available', type: 'uint256', internalType: 'uint256' },
+    ],
+  },
+  {
+    type: 'error',
+    name: 'InvalidAmount',
+    inputs: [],
+  },
+  {
+    type: 'error',
+    name: 'InvalidRecipient',
+    inputs: [],
+  },
+  {
+    type: 'error',
+    name: 'Unauthorized',
+    inputs: [],
+  },
+] as const
+
+export const sponsorshipRegistryAbi = [
+  {
+    type: 'constructor',
+    inputs: [{ name: '_vault', type: 'address', internalType: 'address' }],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'isSponsored',
+    inputs: [{ name: 'wallet', type: 'address', internalType: 'address' }],
+    outputs: [{ name: '', type: 'bool', internalType: 'bool' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'recordSponsorship',
+    inputs: [
+      { name: 'recipient', type: 'address', internalType: 'address' },
+      { name: 'amount', type: 'uint256', internalType: 'uint256' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'sponsorshipCount',
+    inputs: [{ name: '', type: 'address', internalType: 'address' }],
+    outputs: [{ name: '', type: 'uint256', internalType: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'vault',
+    inputs: [],
+    outputs: [{ name: '', type: 'address', internalType: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'event',
+    name: 'SponsorshipGranted',
+    inputs: [
+      { name: 'recipient', type: 'address', indexed: true, internalType: 'address' },
+      { name: 'amount', type: 'uint256', indexed: false, internalType: 'uint256' },
+      { name: 'timestamp', type: 'uint256', indexed: false, internalType: 'uint256' },
+    ],
+    anonymous: false,
+  },
+  {
+    type: 'error',
+    name: 'Unauthorized',
+    inputs: [],
+  },
+] as const

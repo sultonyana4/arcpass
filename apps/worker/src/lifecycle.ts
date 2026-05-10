@@ -5,6 +5,9 @@ import {
   VALID_SPONSORSHIP_TRANSITIONS,
   VALID_RELAY_TRANSITIONS,
 } from '@arcpass/shared'
+import { createLogger } from './logger.js'
+
+const logger = createLogger('lifecycle')
 
 export interface TransitionResult {
   success: boolean
@@ -48,6 +51,12 @@ export async function transitionSponsorshipStatus(
   const allowedTransitions = VALID_SPONSORSHIP_TRANSITIONS[currentStatus]
 
   if (!allowedTransitions.includes(newStatus)) {
+    logger.warn('Invalid sponsorship status transition attempted', {
+      sponsorshipRequestId: requestId,
+      previousStatus: currentStatus,
+      attemptedStatus: newStatus,
+      reason: `Invalid transition from "${currentStatus}" to "${newStatus}"`,
+    })
     return {
       success: false,
       error: `Invalid transition from "${currentStatus}" to "${newStatus}"`,
@@ -128,13 +137,20 @@ export async function createRelayTransaction(
  *   - `confirmedAt` on submitted→confirmed
  *   - `failedAt` on →failed
  * - Stores `transactionHash` or `failureReason` from the data param.
+ * - Stores `blockNumber`, `eventName`, and `eventData` when provided (for confirmed relays).
  * - Rejects invalid transitions and preserves existing state.
  */
 export async function updateRelayTransaction(
   tx: PrismaClient,
   relayTransactionId: string,
   status: RelayStatusValue,
-  data?: { transactionHash?: string; failureReason?: string }
+  data?: {
+    transactionHash?: string
+    failureReason?: string
+    blockNumber?: bigint | null
+    eventName?: string | null
+    eventData?: Record<string, unknown> | null
+  }
 ): Promise<TransitionResult> {
   const relayTransaction = await tx.relayTransaction.findUnique({
     where: { id: relayTransactionId },
@@ -148,6 +164,12 @@ export async function updateRelayTransaction(
   const allowedTransitions = VALID_RELAY_TRANSITIONS[currentStatus]
 
   if (!allowedTransitions.includes(status)) {
+    logger.warn('Invalid relay status transition attempted', {
+      sponsorshipRequestId: relayTransaction.sponsorshipRequestId,
+      previousStatus: currentStatus,
+      attemptedStatus: status,
+      reason: `Invalid relay transition from "${currentStatus}" to "${status}"`,
+    })
     return {
       success: false,
       error: `Invalid relay transition from "${currentStatus}" to "${status}"`,
@@ -169,6 +191,15 @@ export async function updateRelayTransaction(
   }
   if (data?.failureReason) {
     updateData.failureReason = data.failureReason
+  }
+  if (data?.blockNumber !== undefined) {
+    updateData.blockNumber = data.blockNumber
+  }
+  if (data?.eventName !== undefined) {
+    updateData.eventName = data.eventName
+  }
+  if (data?.eventData !== undefined) {
+    updateData.eventData = data.eventData
   }
 
   await tx.relayTransaction.update({

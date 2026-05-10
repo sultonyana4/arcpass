@@ -6,7 +6,7 @@
 export interface LogEntry {
   timestamp: string
   level: 'info' | 'warn' | 'error'
-  component: 'relay-executor' | 'processor' | 'worker' | 'poller'
+  component: 'relay-executor' | 'processor' | 'worker' | 'poller' | 'contract-client' | 'lifecycle'
   message: string
   [key: string]: unknown
 }

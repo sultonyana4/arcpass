@@ -1,4 +1,5 @@
 import { prisma } from '@arcpass/shared'
+import { SponsorshipNotFoundError } from '../lib/errors.js'
 
 /**
  * Creates a new relay transaction record for a sponsorship request.
@@ -79,4 +80,56 @@ export async function getRelayTransactions(sponsorshipRequestId) {
   })
 
   return relayTransactions
+}
+
+/**
+ * Retrieves a relay transaction by its UUID.
+ *
+ * @param {string} id - The relay transaction UUID
+ * @returns {Promise<object|null>} The relay transaction record or null if not found
+ */
+export async function getRelayById(id) {
+  const relay = await prisma.relayTransaction.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      sponsorshipRequestId: true,
+      status: true,
+      relayAttempt: true,
+      transactionHash: true,
+      submittedAt: true,
+      confirmedAt: true,
+      failedAt: true,
+      failureReason: true,
+    },
+  })
+
+  return relay
+}
+
+
+/**
+ * Looks up a relay transaction by its on-chain transaction hash.
+ * Returns the relay transaction along with its associated sponsorship request.
+ *
+ * @param {string} transactionHash - The on-chain transaction hash
+ * @returns {Promise<object>} Object containing sponsorshipRequest and relayTransaction
+ * @throws {SponsorshipNotFoundError} if no relay transaction matches the hash
+ */
+export async function getRelayTransactionByHash(transactionHash) {
+  const relayTransaction = await prisma.relayTransaction.findUnique({
+    where: { transactionHash },
+    include: { sponsorshipRequest: true },
+  })
+
+  if (!relayTransaction) {
+    throw new SponsorshipNotFoundError('Transaction not found')
+  }
+
+  const { sponsorshipRequest, ...relayDetails } = relayTransaction
+
+  return {
+    sponsorshipRequest,
+    relayTransaction: relayDetails,
+  }
 }

@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createRelayTransaction, updateRelayStatus, getRelayTransactions } from '../src/services/relay.service.js'
+import { createRelayTransaction, updateRelayStatus, getRelayTransactions, getRelayById, getRelayTransactionByHash } from '../src/services/relay.service.js'
+import { SponsorshipNotFoundError } from '../src/lib/errors.js'
 
 vi.mock('@arcpass/shared', () => ({
   prisma: {
     relayTransaction: {
       findFirst: vi.fn(),
+      findUnique: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
       findMany: vi.fn(),
@@ -231,6 +233,127 @@ describe('relay.service', () => {
       const result = await getRelayTransactions(sponsorshipRequestId)
 
       expect(result).toEqual([])
+    })
+  })
+
+  describe('getRelayById', () => {
+    it('returns relay transaction when found', async () => {
+      const mockRelay = {
+        id: 'rt-uuid-1',
+        sponsorshipRequestId: 'sr-uuid-1',
+        status: 'submitted',
+        relayAttempt: 1,
+        transactionHash: '0xabc123',
+        submittedAt: new Date('2025-01-01T00:00:00Z'),
+        confirmedAt: null,
+        failedAt: null,
+        failureReason: null,
+      }
+      prisma.relayTransaction.findUnique.mockResolvedValue(mockRelay)
+
+      const result = await getRelayById('rt-uuid-1')
+
+      expect(prisma.relayTransaction.findUnique).toHaveBeenCalledWith({
+        where: { id: 'rt-uuid-1' },
+        select: {
+          id: true,
+          sponsorshipRequestId: true,
+          status: true,
+          relayAttempt: true,
+          transactionHash: true,
+          submittedAt: true,
+          confirmedAt: true,
+          failedAt: true,
+          failureReason: true,
+        },
+      })
+      expect(result).toEqual(mockRelay)
+    })
+
+    it('returns null when relay transaction not found', async () => {
+      prisma.relayTransaction.findUnique.mockResolvedValue(null)
+
+      const result = await getRelayById('non-existent-uuid')
+
+      expect(result).toBeNull()
+    })
+  })
+
+  describe('getRelayTransactionByHash', () => {
+    it('returns sponsorship request and relay transaction when hash is found', async () => {
+      const mockRelayWithRequest = {
+        id: 'rt-uuid-1',
+        sponsorshipRequestId: 'sr-uuid-1',
+        status: 'confirmed',
+        relayAttempt: 1,
+        transactionHash: '0xabc123def456',
+        submittedAt: new Date('2025-01-01T00:00:00Z'),
+        confirmedAt: new Date('2025-01-01T00:01:00Z'),
+        failedAt: null,
+        failureReason: null,
+        blockNumber: 12345n,
+        eventName: 'SponsorshipGranted',
+        eventData: null,
+        sponsorshipRequest: {
+          id: 'sr-uuid-1',
+          walletId: 'wallet-uuid-1',
+          status: 'completed',
+          requestedAt: new Date('2025-01-01T00:00:00Z'),
+        },
+      }
+      prisma.relayTransaction.findUnique.mockResolvedValue(mockRelayWithRequest)
+
+      const result = await getRelayTransactionByHash('0xabc123def456')
+
+      expect(prisma.relayTransaction.findUnique).toHaveBeenCalledWith({
+        where: { transactionHash: '0xabc123def456' },
+        include: { sponsorshipRequest: true },
+      })
+      expect(result.sponsorshipRequest).toEqual(mockRelayWithRequest.sponsorshipRequest)
+      expect(result.relayTransaction.id).toBe('rt-uuid-1')
+      expect(result.relayTransaction.transactionHash).toBe('0xabc123def456')
+      expect(result.relayTransaction.sponsorshipRequest).toBeUndefined()
+    })
+
+    it('throws SponsorshipNotFoundError when no relay transaction matches the hash', async () => {
+      prisma.relayTransaction.findUnique.mockResolvedValue(null)
+
+      await expect(getRelayTransactionByHash('0xnonexistent')).rejects.toThrow(
+        SponsorshipNotFoundError
+      )
+      await expect(getRelayTransactionByHash('0xnonexistent')).rejects.toThrow(
+        'Transaction not found'
+      )
+    })
+
+    it('separates relay details from sponsorship request in the response', async () => {
+      const mockRelayWithRequest = {
+        id: 'rt-uuid-2',
+        sponsorshipRequestId: 'sr-uuid-2',
+        status: 'confirmed',
+        relayAttempt: 2,
+        transactionHash: '0xdef789',
+        submittedAt: new Date(),
+        confirmedAt: new Date(),
+        failedAt: null,
+        failureReason: null,
+        blockNumber: null,
+        eventName: null,
+        eventData: null,
+        sponsorshipRequest: {
+          id: 'sr-uuid-2',
+          walletId: 'wallet-uuid-2',
+          status: 'completed',
+        },
+      }
+      prisma.relayTransaction.findUnique.mockResolvedValue(mockRelayWithRequest)
+
+      const result = await getRelayTransactionByHash('0xdef789')
+
+      expect(result).toHaveProperty('sponsorshipRequest')
+      expect(result).toHaveProperty('relayTransaction')
+      expect(result.relayTransaction).not.toHaveProperty('sponsorshipRequest')
+      expect(result.relayTransaction.sponsorshipRequestId).toBe('sr-uuid-2')
     })
   })
 })

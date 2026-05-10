@@ -6,6 +6,7 @@ import { ValidationError, BlockedWalletError, WalletNotFoundError, SponsorshipNo
 import healthRoutes from './routes/health.js'
 import walletRoutes from './routes/wallets.js'
 import sponsorshipRoutes from './routes/sponsorship.js'
+import relayRoutes from './routes/relay.js'
 
 const app = Fastify({
   logger: {
@@ -67,6 +68,7 @@ app.setErrorHandler((error, request, reply) => {
 app.register(healthRoutes)
 app.register(walletRoutes, { prefix: '/wallets' })
 app.register(sponsorshipRoutes, { prefix: '/sponsorship' })
+app.register(relayRoutes, { prefix: '/relay' })
 
 async function start() {
   try {

@@ -69,7 +69,22 @@ export async function createSponsorshipRequest({ walletAddress, ipAddress, userA
 export async function getSponsorshipRequest(requestId) {
   const sponsorshipRequest = await prisma.sponsorshipRequest.findUnique({
     where: { id: requestId },
-    include: { wallet: true },
+    include: {
+      wallet: true,
+      relayTransactions: {
+        orderBy: { relayAttempt: 'asc' },
+        select: {
+          id: true,
+          status: true,
+          relayAttempt: true,
+          transactionHash: true,
+          submittedAt: true,
+          confirmedAt: true,
+          failedAt: true,
+          failureReason: true,
+        },
+      },
+    },
   })
 
   if (!sponsorshipRequest) {

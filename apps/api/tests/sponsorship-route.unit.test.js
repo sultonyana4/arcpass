@@ -7,7 +7,12 @@ vi.mock('../src/services/sponsorship.service.js', () => ({
   getSponsorshipRequest: vi.fn(),
 }))
 
+vi.mock('../src/services/relay.service.js', () => ({
+  getRelayTransactionByHash: vi.fn(),
+}))
+
 import { createSponsorshipRequest, getSponsorshipRequest } from '../src/services/sponsorship.service.js'
+import { getRelayTransactionByHash } from '../src/services/relay.service.js'
 import sponsorshipRoutes from '../src/routes/sponsorship.js'
 
 function buildApp() {
@@ -277,5 +282,108 @@ describe('POST /sponsorship/request', () => {
     })
 
     expect(res.statusCode).toBe(400)
+  })
+})
+
+
+describe('GET /sponsorship/tx/:hash', () => {
+  let app
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(async () => {
+    if (app) {
+      await app.close()
+      app = null
+    }
+  })
+
+  it('returns 200 with sponsorship request and relay transaction when hash is found', async () => {
+    const mockResult = {
+      sponsorshipRequest: {
+        id: 'sr-uuid-1',
+        walletId: 'wallet-uuid-1',
+        status: 'completed',
+        requestedAt: '2025-01-01T00:00:00.000Z',
+      },
+      relayTransaction: {
+        id: 'rt-uuid-1',
+        sponsorshipRequestId: 'sr-uuid-1',
+        status: 'confirmed',
+        relayAttempt: 1,
+        transactionHash: '0xabc123def456',
+        submittedAt: '2025-01-01T00:00:00.000Z',
+        confirmedAt: '2025-01-01T00:01:00.000Z',
+        failedAt: null,
+        failureReason: null,
+      },
+    }
+    getRelayTransactionByHash.mockResolvedValue(mockResult)
+
+    app = buildApp()
+    await app.ready()
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/sponsorship/tx/0xabc123def456',
+    })
+
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual(mockResult)
+    expect(getRelayTransactionByHash).toHaveBeenCalledWith('0xabc123def456')
+  })
+
+  it('returns 404 when no transaction matches the hash', async () => {
+    getRelayTransactionByHash.mockRejectedValue(
+      new SponsorshipNotFoundError('Transaction not found')
+    )
+
+    app = buildApp()
+    await app.ready()
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/sponsorship/tx/0xnonexistent',
+    })
+
+    expect(res.statusCode).toBe(404)
+    expect(res.json()).toEqual({
+      error: 'Transaction not found',
+      statusCode: 404,
+    })
+  })
+
+  it('returns 400 when hash is empty', async () => {
+    app = buildApp()
+    await app.ready()
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/sponsorship/tx/',
+    })
+
+    // Fastify validates minLength: 1 on the param schema
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('passes the hash parameter directly to the service', async () => {
+    const txHash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+    getRelayTransactionByHash.mockResolvedValue({
+      sponsorshipRequest: { id: 'sr-1' },
+      relayTransaction: { id: 'rt-1', transactionHash: txHash },
+    })
+
+    app = buildApp()
+    await app.ready()
+
+    await app.inject({
+      method: 'GET',
+      url: `/sponsorship/tx/${txHash}`,
+    })
+
+    expect(getRelayTransactionByHash).toHaveBeenCalledTimes(1)
+    expect(getRelayTransactionByHash).toHaveBeenCalledWith(txHash)
   })
 })
