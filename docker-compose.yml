@@ -16,5 +16,22 @@ services:
       retries: 5
       start_period: 10s
 
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://arcpass:arcpass_local@postgres:5432/arcpass_dev?schema=public
+      POLL_INTERVAL_MS: 5000
+      BATCH_SIZE: 20
+      MAX_RETRIES: 5
+      RELAY_FAILURE_RATE: "0.0"
+      LOCK_TIMEOUT_MS: 30000
+      SHUTDOWN_TIMEOUT_MS: 10000
+    restart: unless-stopped
+
 volumes:
   arcpass_pgdata:

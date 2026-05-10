@@ -6,6 +6,7 @@ export default defineConfig({
       'tests/unit/**/*.test.ts',
       'tests/property/**/*.test.ts',
       'tests/integration/**/*.test.ts',
+      'tests/*.smoke.test.ts',
     ],
     testTimeout: 10000,
   },

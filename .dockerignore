@@ -1,0 +1,26 @@
+# Dependencies
+**/node_modules
+
+# Version control
+.git/
+
+# Build output
+**/dist
+
+# Documentation
+*.md
+
+# Environment files
+.env
+.env.*
+
+# Turbo cache
+**/.turbo
+
+# IDE config directories
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
