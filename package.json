@@ -1,10 +1,12 @@
 {
   "name": "arcpass",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
+    "validate": "vitest --run --config vitest.config.validation.ts",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:generate": "pnpm --filter @arcpass/shared generate",
@@ -13,6 +15,8 @@
     "db:studio": "pnpm --filter @arcpass/shared studio"
   },
   "devDependencies": {
-    "turbo": "^2.9.12"
+    "fast-check": "^4.7.0",
+    "turbo": "^2.9.12",
+    "vitest": "^3.2.3"
   }
 }

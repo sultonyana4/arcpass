@@ -8,9 +8,15 @@ importers:
 
   .:
     devDependencies:
+      fast-check:
+        specifier: ^4.7.0
+        version: 4.7.0
       turbo:
         specifier: ^2.9.12
         version: 2.9.12
+      vitest:
+        specifier: ^3.2.3
+        version: 3.2.4(@types/node@22.19.18)(jiti@2.7.0)(lightningcss@1.32.0)
 
   apps/api:
     dependencies:
