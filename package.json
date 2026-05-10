@@ -4,7 +4,13 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "turbo run dev",
-    "build": "turbo run build"
+    "build": "turbo run build",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:generate": "pnpm --filter @arcpass/shared generate",
+    "db:migrate": "pnpm --filter @arcpass/shared migrate:dev",
+    "db:reset": "pnpm --filter @arcpass/shared db:reset",
+    "db:studio": "pnpm --filter @arcpass/shared studio"
   },
   "devDependencies": {
     "turbo": "^2.9.12"

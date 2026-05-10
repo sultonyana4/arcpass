@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- Enums ---
+
+enum SponsorshipRequestStatus {
+  pending
+  approved
+  rejected
+  relayed
+  completed
+  failed
+}
+
+enum RelayTransactionStatus {
+  queued
+  submitted
+  confirmed
+  failed
+}
+
+enum RateLimitIdentifierType {
+  ip
+  wallet
+  user_agent
+}
+
+// --- Models ---
+
+model Wallet {
+  id               String   @id @default(uuid())
+  walletAddress    String   @unique @db.VarChar(255)
+  firstSeenAt      DateTime @default(now())
+  lastSeenAt       DateTime @default(now())
+  sponsorshipCount Int      @default(0)
+  isBlocked        Boolean  @default(false)
+  blockReason      String?  @db.VarChar(500)
+
+  sponsorshipRequests SponsorshipRequest[]
+
+  @@map("wallets")
+}
+
+model SponsorshipRequest {
+  id                String                    @id @default(uuid())
+  walletId          String
+  status            SponsorshipRequestStatus  @default(pending)
+  eligibilityReason String?                   @db.VarChar(500)
+  requestedAt       DateTime                  @default(now())
+  approvedAt        DateTime?
+  rejectedAt        DateTime?
+  completedAt       DateTime?
+  failedAt          DateTime?
+  ipAddress         String?                   @db.VarChar(45)
+  userAgent         String?                   @db.VarChar(1024)
+
+  wallet            Wallet                    @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  relayTransactions RelayTransaction[]
+
+  @@index([walletId, status])
+  @@index([walletId])
+  @@map("sponsorship_requests")
+}
+
+model RelayTransaction {
+  id                     String                  @id @default(uuid())
+  sponsorshipRequestId   String
+  transactionHash        String?                 @unique @db.VarChar(255)
+  status                 RelayTransactionStatus  @default(queued)
+  relayAttempt           Int                     @default(1)
+  submittedAt            DateTime?
+  confirmedAt            DateTime?
+  failedAt              DateTime?
+  failureReason          String?                 @db.VarChar(1000)
+
+  sponsorshipRequest     SponsorshipRequest      @relation(fields: [sponsorshipRequestId], references: [id], onDelete: Restrict)
+
+  @@index([sponsorshipRequestId])
+  @@map("relay_transactions")
+}
+
+model RateLimit {
+  id             String                  @id @default(uuid())
+  identifier     String                  @db.VarChar(255)
+  identifierType RateLimitIdentifierType
+  requestCount   Int                     @default(0)
+  windowStart    DateTime                @default(now())
+  blockedUntil   DateTime?
+
+  @@index([identifier, identifierType])
+  @@map("rate_limits")
+}

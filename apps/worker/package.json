@@ -1,0 +1,26 @@
+{
+  "name": "@arcpass/worker",
+  "version": "0.1.0",
+  "description": "Background sponsorship processing worker for ArcPass",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "start": "node --import dotenv/config dist/main.js",
+    "dev": "node --watch --import dotenv/config dist/main.js",
+    "build": "tsc",
+    "test": "vitest --run",
+    "test:unit": "vitest --run tests/unit/",
+    "test:property": "vitest --run tests/property/",
+    "test:integration": "vitest --run tests/integration/"
+  },
+  "dependencies": {
+    "@arcpass/shared": "workspace:*",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "fast-check": "^4.1.1",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.3"
+  }
+}
