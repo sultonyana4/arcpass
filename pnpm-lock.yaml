@@ -94,6 +94,9 @@ importers:
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
+      prisma:
+        specifier: ^6.9.0
+        version: 6.19.3(typescript@5.9.3)
       viem:
         specifier: 2.31.3
         version: 2.31.3(typescript@5.9.3)
