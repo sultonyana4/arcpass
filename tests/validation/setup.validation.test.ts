@@ -8,7 +8,7 @@ describe('Validation Infrastructure', () => {
   })
 
   it('shared constants are importable and have expected types', () => {
-    expect(constants.EXPECTED_CHAIN_ID).toBe(1942999)
+    expect(constants.EXPECTED_CHAIN_ID).toBe(5042002)
     expect(constants.API_BASE_URL).toBeTypeOf('string')
     expect(constants.DB_CONNECTION_TIMEOUT_MS).toBeTypeOf('number')
     expect(constants.API_HEALTH_TIMEOUT_MS).toBeTypeOf('number')

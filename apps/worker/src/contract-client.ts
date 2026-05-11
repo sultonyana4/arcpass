@@ -35,7 +35,7 @@ export interface ContractRelayResult {
 let clients: ViemClients | null = null
 let config: ContractConfig | null = null
 let timeoutMs: number = 120_000
-let explorerBaseUrl: string = 'https://testnet.arcscan.io/tx/'
+let explorerBaseUrl: string = 'https://testnet.arcscan.app/tx/'
 
 const logger = createLogger('contract-client' as LogEntry['component'])
 

@@ -91,7 +91,7 @@ describe('relay-executor', () => {
         transactionHash: '0xabc123',
         blockNumber: 42n,
         failureReason: null,
-        explorerUrl: 'https://testnet.arcscan.io/tx/0xabc123',
+        explorerUrl: 'https://testnet.arcscan.app/tx/0xabc123',
         eventData: { recipient: '0x1234', amount: 1000n, timestamp: 1000n },
       })
 
@@ -226,7 +226,7 @@ describe('relay-executor', () => {
         transactionHash: '0xfast',
         blockNumber: 100n,
         failureReason: null,
-        explorerUrl: 'https://testnet.arcscan.io/tx/0xfast',
+        explorerUrl: 'https://testnet.arcscan.app/tx/0xfast',
         eventData: null,
       })
 

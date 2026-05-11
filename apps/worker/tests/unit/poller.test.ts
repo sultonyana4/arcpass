@@ -47,7 +47,7 @@ function createTestConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
     contractAddressSponsorshipRegistry: `0x${'b'.repeat(40)}` as `0x${string}`,
     sponsorshipAmount: 1000000000000000n,
     chainIdVerifyTimeoutMs: 10000,
-    explorerBaseUrl: 'https://testnet.arcscan.io/tx/',
+    explorerBaseUrl: 'https://testnet.arcscan.app/tx/',
     ...overrides,
   } as WorkerConfig
 }

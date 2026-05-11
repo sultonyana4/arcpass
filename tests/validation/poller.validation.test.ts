@@ -61,12 +61,12 @@ function createMockConfig(overrides: Record<string, unknown> = {}) {
     shutdownTimeoutMs: 10000,
     confirmationBlocks: 2,
     txTimeoutMs: 120000,
-    chainId: 1942999,
+    chainId: 5042002,
     contractAddressSponsorVault: '0x1234567890abcdef1234567890abcdef12345678' as `0x${string}`,
     contractAddressSponsorshipRegistry: '0xabcdef1234567890abcdef1234567890abcdef12' as `0x${string}`,
     sponsorshipAmount: 1000000000000000n,
     chainIdVerifyTimeoutMs: 10000,
-    explorerBaseUrl: 'https://testnet.arcscan.io/tx/',
+    explorerBaseUrl: 'https://testnet.arcscan.app/tx/',
     ...overrides,
   }
 }

@@ -11,7 +11,7 @@
  * - confirmedAt is ≥ submittedAt and ≤ current time + 60 seconds
  * - AlreadySponsored path leaves transactionHash null with status confirmed
  * - updateRelayTransaction failure retains pre-confirmation state and propagates error
- * - explorerUrl follows pattern https://testnet.arcscan.io/tx/{transactionHash} with lowercase hex
+ * - explorerUrl follows pattern https://testnet.arcscan.app/tx/{transactionHash} with lowercase hex
  * - explorerUrl contains the exact transactionHash from the same record
  * - explorerUrl length ≤ 512 characters
  * - null explorerUrl after confirmed status flags validation failure
@@ -674,14 +674,14 @@ describe('Transaction Hash Persistence Validation', () => {
 // ─── Explorer URL Generation Validation (Requirements 8.1-8.5) ───────────────
 
 describe('Explorer URL Generation Validation', () => {
-  const EXPLORER_URL_PATTERN = /^https:\/\/testnet\.arcscan\.io\/tx\/0x[0-9a-f]{64}$/
+  const EXPLORER_URL_PATTERN = /^https:\/\/testnet\.arcscan\.app\/tx\/0x[0-9a-f]{64}$/
 
   // ─── Requirement 8.1: explorerUrl follows pattern with lowercase hex ────────
 
   describe('Explorer URL format (Requirement 8.1)', () => {
-    it('explorerUrl follows pattern https://testnet.arcscan.io/tx/{transactionHash} with lowercase hex', () => {
+    it('explorerUrl follows pattern https://testnet.arcscan.app/tx/{transactionHash} with lowercase hex', () => {
       const validHash = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
-      const expectedUrl = `https://testnet.arcscan.io/tx/${validHash}`
+      const expectedUrl = `https://testnet.arcscan.app/tx/${validHash}`
 
       expect(expectedUrl).toMatch(EXPLORER_URL_PATTERN)
       expect(expectedUrl).toBe(`${EXPLORER_BASE_URL}${validHash}`)
@@ -689,14 +689,14 @@ describe('Explorer URL Generation Validation', () => {
 
     it('rejects explorerUrl with uppercase hex characters in transaction hash', () => {
       const upperHash = '0xABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890'
-      const invalidUrl = `https://testnet.arcscan.io/tx/${upperHash}`
+      const invalidUrl = `https://testnet.arcscan.app/tx/${upperHash}`
 
       expect(invalidUrl).not.toMatch(EXPLORER_URL_PATTERN)
     })
 
     it('rejects explorerUrl with mixed case hex characters in transaction hash', () => {
       const mixedHash = '0xAbCdEf1234567890AbCdEf1234567890AbCdEf1234567890AbCdEf1234567890'
-      const invalidUrl = `https://testnet.arcscan.io/tx/${mixedHash}`
+      const invalidUrl = `https://testnet.arcscan.app/tx/${mixedHash}`
 
       expect(invalidUrl).not.toMatch(EXPLORER_URL_PATTERN)
     })
@@ -775,7 +775,7 @@ describe('Explorer URL Generation Validation', () => {
       const txHash = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
       const explorerUrl = `${EXPLORER_BASE_URL}${txHash}`
 
-      // Base URL (https://testnet.arcscan.io/tx/) = 34 chars + 66 char hash = 100 chars total
+      // Base URL (https://testnet.arcscan.app/tx/) = 35 chars + 66 char hash = 101 chars total
       expect(explorerUrl.length).toBeLessThanOrEqual(512)
       expect(explorerUrl.length).toBe(EXPLORER_BASE_URL.length + txHash.length)
     })

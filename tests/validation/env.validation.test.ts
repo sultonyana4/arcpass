@@ -61,14 +61,14 @@ describe('Environment Configuration Validation', () => {
     // ─── Requirement 11.3: CHAIN_ID ────────────────────────────────────────
 
     describe('CHAIN_ID', () => {
-      it('is set to 1942999', () => {
+      it('is set to 5042002', () => {
         const chainId = process.env.CHAIN_ID
         expect(chainId, 'CHAIN_ID must be set').toBeDefined()
         expect(chainId!.length, 'CHAIN_ID must not be empty').toBeGreaterThan(0)
         expect(
           Number(chainId),
-          `CHAIN_ID must be 1942999, got: ${chainId}`
-        ).toBe(1942999)
+          `CHAIN_ID must be 5042002, got: ${chainId}`
+        ).toBe(5042002)
       })
     })
 

@@ -1,5 +1,24 @@
 import 'dotenv/config'
 
+/**
+ * Resolve environment variable with fallback alias for backward compatibility.
+ * Supports legacy variable names (ARC_RPC_URL, DEPLOYER_PRIVATE_KEY) as fallbacks
+ * for the canonical names (CHAIN_RPC_URL, SPONSOR_PRIVATE_KEY).
+ */
+function resolveEnv(canonical: string, fallback?: string): string | undefined {
+  const value = process.env[canonical]
+  if (value && value.trim() !== '') return value
+  if (fallback) {
+    const fallbackValue = process.env[fallback]
+    if (fallbackValue && fallbackValue.trim() !== '') {
+      // Promote fallback into canonical so downstream checks see it
+      process.env[canonical] = fallbackValue
+      return fallbackValue
+    }
+  }
+  return value
+}
+
 export interface WorkerConfig {
   databaseUrl: string
   chainRpcUrl: string
@@ -25,6 +44,11 @@ const CONTRACT_ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/
 
 export function loadConfig(): WorkerConfig {
   const errors: string[] = []
+
+  // 0. Resolve backward-compatible aliases before validation
+  // ARC_RPC_URL → CHAIN_RPC_URL, DEPLOYER_PRIVATE_KEY → SPONSOR_PRIVATE_KEY
+  resolveEnv('CHAIN_RPC_URL', 'ARC_RPC_URL')
+  resolveEnv('SPONSOR_PRIVATE_KEY', 'DEPLOYER_PRIVATE_KEY')
 
   // 1. Check all required environment variables are present (non-empty after trimming)
   const requiredVars = [
@@ -119,7 +143,7 @@ export function loadConfig(): WorkerConfig {
 
   // Parse optional explorer base URL with trailing slash normalization
   const explorerBaseUrl = normalizeTrailingSlash(
-    process.env.EXPLORER_BASE_URL || 'https://testnet.arcscan.io/tx/'
+    process.env.EXPLORER_BASE_URL || 'https://testnet.arcscan.app/tx/'
   )
 
   // Return frozen config object to prevent accidental mutation (Requirement 8.8)

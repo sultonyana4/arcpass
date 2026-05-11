@@ -19,11 +19,11 @@ export const DATABASE_URL = process.env.DATABASE_URL || ''
 // ─── Chain Configuration ─────────────────────────────────────────────────────
 
 /** Expected chain ID for Arc testnet */
-export const EXPECTED_CHAIN_ID = 1942999
+export const EXPECTED_CHAIN_ID = 5042002
 
 /** Explorer base URL for transaction links */
 export const EXPLORER_BASE_URL =
-  process.env.EXPLORER_BASE_URL || 'https://testnet.arcscan.io/tx/'
+  process.env.EXPLORER_BASE_URL || 'https://testnet.arcscan.app/tx/'
 
 // ─── Contract Addresses ──────────────────────────────────────────────────────
 

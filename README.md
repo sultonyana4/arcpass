@@ -334,7 +334,7 @@ The worker container:
 
 ## Arc Network Integration
 
-ArcPass targets the Arc testnet (chain ID `1942999`). The worker verifies the chain ID against the configured RPC endpoint at startup and terminates on mismatch.
+ArcPass targets the Arc testnet (chain ID `5042002`). The worker verifies the chain ID against the configured RPC endpoint at startup and terminates on mismatch.
 
 ### Smart Contracts
 

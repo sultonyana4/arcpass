@@ -4,7 +4,7 @@
  * Validates that the worker process initializes all subsystems correctly:
  * - loadConfig() completes without process.exit(1)
  * - createViemClients() derives a valid 42-character hex account address
- * - verifyChainId() confirms chain ID 1942999 within timeout
+ * - verifyChainId() confirms chain ID 5042002 within timeout
  * - initializeContractClient(), initializeRelayExecutor(), createPoller() complete without throwing
  * - Subsystem failures log the failing subsystem name and exit with code 1
  * - verifyChainId() timeout logs RPC unreachable error and exits with code 1
@@ -45,7 +45,7 @@ describe('Worker Startup Validation', () => {
         DATABASE_URL: 'postgresql://user:pass@localhost:5432/arcpass_dev',
         CHAIN_RPC_URL: 'https://rpc.arc.testnet',
         SPONSOR_PRIVATE_KEY: 'ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
-        CHAIN_ID: '1942999',
+        CHAIN_ID: '5042002',
         CONTRACT_ADDRESS_SPONSOR_VAULT: '0x1234567890abcdef1234567890abcdef12345678',
         CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY: '0xabcdef1234567890abcdef1234567890abcdef12',
       }
@@ -61,7 +61,7 @@ describe('Worker Startup Validation', () => {
       expect(config).toBeDefined()
       expect(config.databaseUrl).toBe('postgresql://user:pass@localhost:5432/arcpass_dev')
       expect(config.chainRpcUrl).toBe('https://rpc.arc.testnet')
-      expect(config.chainId).toBe(1942999)
+      expect(config.chainId).toBe(5042002)
     })
 
     it('validates all required env vars are present and correctly formatted', async () => {
@@ -70,7 +70,7 @@ describe('Worker Startup Validation', () => {
         DATABASE_URL: 'postgresql://user:pass@localhost:5432/arcpass_dev',
         CHAIN_RPC_URL: 'https://rpc.arc.testnet',
         SPONSOR_PRIVATE_KEY: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
-        CHAIN_ID: '1942999',
+        CHAIN_ID: '5042002',
         CONTRACT_ADDRESS_SPONSOR_VAULT: '0x1234567890abcdef1234567890abcdef12345678',
         CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY: '0xabcdef1234567890abcdef1234567890abcdef12',
       }
@@ -86,7 +86,7 @@ describe('Worker Startup Validation', () => {
       // Verify format validation passed for all required vars
       expect(config.contractAddressSponsorVault).toMatch(/^0x[0-9a-fA-F]{40}$/)
       expect(config.contractAddressSponsorshipRegistry).toMatch(/^0x[0-9a-fA-F]{40}$/)
-      expect(config.chainId).toBe(1942999)
+      expect(config.chainId).toBe(5042002)
     })
   })
 
@@ -134,10 +134,10 @@ describe('Worker Startup Validation', () => {
     })
   })
 
-  // ─── Requirement 3.3: verifyChainId() confirms chain ID 1942999 ──────────
+  // ─── Requirement 3.3: verifyChainId() confirms chain ID 5042002 ──────────
 
   describe('verifyChainId()', () => {
-    it('receives chain ID 1942999 within configured timeout when RPC is available', async function () {
+    it('receives chain ID 5042002 within configured timeout when RPC is available', async function () {
       if (!rpcAvailable) {
         return // Skip when RPC is not reachable
       }
@@ -155,7 +155,7 @@ describe('Worker Startup Validation', () => {
         sponsorPrivateKey: testPrivateKey,
       })
 
-      // verifyChainId should complete without throwing for chain ID 1942999
+      // verifyChainId should complete without throwing for chain ID 5042002
       await expect(
         verifyChainId(clients.publicClient, EXPECTED_CHAIN_ID, CHAIN_ID_VERIFY_TIMEOUT_MS)
       ).resolves.toBeUndefined()
@@ -215,7 +215,7 @@ describe('Worker Startup Validation', () => {
             sponsorshipRegistryAbi: [],
           },
           120000,
-          'https://testnet.arcscan.io/tx/'
+          'https://testnet.arcscan.app/tx/'
         )
       }).not.toThrow()
     })
@@ -257,12 +257,12 @@ describe('Worker Startup Validation', () => {
         shutdownTimeoutMs: 10000,
         confirmationBlocks: 2,
         txTimeoutMs: 120000,
-        chainId: 1942999,
+        chainId: 5042002,
         contractAddressSponsorVault: '0x1234567890abcdef1234567890abcdef12345678' as `0x${string}`,
         contractAddressSponsorshipRegistry: '0xabcdef1234567890abcdef1234567890abcdef12' as `0x${string}`,
         sponsorshipAmount: 1000000000000000n,
         chainIdVerifyTimeoutMs: 10000,
-        explorerBaseUrl: 'https://testnet.arcscan.io/tx/',
+        explorerBaseUrl: 'https://testnet.arcscan.app/tx/',
       }
 
       let poller: { start: () => void; stop: () => Promise<void> } | null = null
