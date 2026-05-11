@@ -53,7 +53,7 @@ RUN pnpm install --frozen-lockfile --prod --node-linker=hoisted
 # ============================================================
 FROM node:22-alpine AS runtime
 
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl wget
 
 WORKDIR /app
 

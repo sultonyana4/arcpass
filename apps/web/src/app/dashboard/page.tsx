@@ -8,6 +8,9 @@ import { DashboardRefresh } from '@/components/features/dashboard-refresh'
 import type { ColumnDef, ComponentStatus } from '@/types/components'
 import type { DashboardMetrics, SponsorshipSummary, HealthResponse } from '@/types/api'
 
+// Force dynamic rendering — this page fetches live data from the API at request time
+export const dynamic = 'force-dynamic'
+
 export const metadata: Metadata = {
   title: 'Dashboard | ArcPass',
   description: 'Sponsorship metrics, recent activity, and system health for ArcPass infrastructure.',
