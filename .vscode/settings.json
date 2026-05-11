@@ -1,2 +1,5 @@
 {
+    "kiroAgent.trustedCommands": [
+        "kiroAgent.trustedCommands"
+    ]
 }

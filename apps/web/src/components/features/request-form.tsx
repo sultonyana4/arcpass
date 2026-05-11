@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import {
   createSponsorshipRequest,
   getSponsorshipStatus,
+  registerWallet,
   validateWalletAddress,
   ApiError,
   NetworkError,
@@ -162,6 +163,10 @@ export function RequestForm() {
     setShowManualRetry(false)
 
     try {
+      // Step 1: Register wallet (idempotent — returns 200 if already registered)
+      await registerWallet(walletAddress)
+
+      // Step 2: Create sponsorship request
       const response = await createSponsorshipRequest(walletAddress)
       setRequestId(response.id)
       setSponsorship(null)
