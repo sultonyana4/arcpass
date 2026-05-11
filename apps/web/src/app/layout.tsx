@@ -18,6 +18,10 @@ export const metadata: Metadata = {
   title: "ArcPass | Gas Sponsorship Infrastructure",
   description:
     "Onboarding infrastructure for Arc Network — sponsored first transactions for new wallets",
+  icons: {
+    icon: "/ArcPass.png",
+    apple: "/ArcPass.png",
+  },
   openGraph: {
     title: "ArcPass | Gas Sponsorship Infrastructure",
     description:

@@ -19,6 +19,8 @@ const POLLING_INTERVAL_MS = 3000
 const MAX_POLLING_RETRIES = 3
 const TERMINAL_STATUSES = ['completed', 'failed', 'rejected'] as const
 
+type RequestState = 'idle' | 'loading' | 'success' | 'error'
+
 function isTerminalStatus(status: string): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status)
 }
@@ -28,7 +30,7 @@ export function RequestForm() {
   const [validationState, setValidationState] = useState<ValidationState>('idle')
   const [validationError, setValidationError] = useState<string | undefined>(undefined)
 
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [requestState, setRequestState] = useState<RequestState>('idle')
   const [requestId, setRequestId] = useState<string | null>(null)
   const [sponsorship, setSponsorship] = useState<SponsorshipDetailResponse | null>(null)
 
@@ -38,9 +40,11 @@ export function RequestForm() {
   const [showManualRetry, setShowManualRetry] = useState(false)
 
   const [rateLimitMessage, setRateLimitMessage] = useState<string | null>(null)
+  const [rateLimitUntil, setRateLimitUntil] = useState<number | null>(null)
 
   const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const retriesRef = useRef(0)
+  const submitInFlightRef = useRef(false)
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -53,7 +57,6 @@ export function RequestForm() {
 
   const handleAddressChange = useCallback((value: string) => {
     setWalletAddress(value)
-    setRateLimitMessage(null)
 
     if (value === '') {
       setValidationState('idle')
@@ -132,8 +135,17 @@ export function RequestForm() {
     }
   }, [requestId, startPolling])
 
+  // Check if currently rate-limited
+  const isRateLimited = rateLimitUntil !== null && Date.now() < rateLimitUntil
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    // Guard: prevent duplicate in-flight requests
+    if (submitInFlightRef.current) return
+
+    // Guard: block submission during rate limit cooldown
+    if (isRateLimited) return
 
     // Validate before submit
     if (!validateWalletAddress(walletAddress)) {
@@ -142,7 +154,8 @@ export function RequestForm() {
       return
     }
 
-    setIsSubmitting(true)
+    submitInFlightRef.current = true
+    setRequestState('loading')
     setValidationError(undefined)
     setRateLimitMessage(null)
     setPollingError(null)
@@ -152,8 +165,10 @@ export function RequestForm() {
       const response = await createSponsorshipRequest(walletAddress)
       setRequestId(response.id)
       setSponsorship(null)
+      setRequestState('success')
       startPolling(response.id)
     } catch (error: unknown) {
+      setRequestState('error')
       if (error instanceof ApiError) {
         if (error.statusCode === 400) {
           setValidationState('invalid')
@@ -161,10 +176,12 @@ export function RequestForm() {
         } else if (error.statusCode === 429) {
           // Extract retry-after from the error message or use a default
           const retryMatch = error.message.match(/(\d+)/)
-          const retrySeconds = retryMatch ? retryMatch[1] : '60'
+          const retrySeconds = retryMatch ? parseInt(retryMatch[1], 10) : 60
           setRateLimitMessage(
             `Rate limited. Please try again in ${retrySeconds} seconds.`,
           )
+          // Block submissions for the cooldown period
+          setRateLimitUntil(Date.now() + retrySeconds * 1000)
         } else {
           setValidationState('invalid')
           setValidationError(error.message)
@@ -174,9 +191,14 @@ export function RequestForm() {
         setValidationError('Network error. Please check your connection and try again.')
       }
     } finally {
-      setIsSubmitting(false)
+      submitInFlightRef.current = false
     }
   }
+
+  const isSubmitDisabled =
+    requestState === 'loading' ||
+    validationState === 'invalid' ||
+    isRateLimited
 
   // Find the latest relay transaction with a hash
   const relayTxHash = sponsorship?.relayTransactions?.find(
@@ -204,8 +226,8 @@ export function RequestForm() {
 
         <Button
           type="submit"
-          loading={isSubmitting}
-          disabled={isSubmitting || validationState === 'invalid'}
+          loading={requestState === 'loading'}
+          disabled={isSubmitDisabled}
         >
           Request Sponsorship
         </Button>

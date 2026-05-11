@@ -16,11 +16,17 @@ interface InfraStatus {
   rpc: ComponentStatus
 }
 
+interface RuntimeConfig {
+  sponsorVaultAddress: string | null
+  sponsorshipRegistryAddress: string | null
+  chainId: number
+}
+
 /**
  * Infrastructure refresh Client Component.
  * Checks all ArcPass system component statuses on mount and via manual refresh.
  * Displays status cards for API, Database, Worker, and RPC connectivity,
- * plus contract address configuration.
+ * plus contract address configuration fetched at runtime.
  */
 export function InfraRefresh() {
   const [statuses, setStatuses] = useState<InfraStatus>({
@@ -30,6 +36,27 @@ export function InfraRefresh() {
     rpc: 'degraded',
   })
   const [loading, setLoading] = useState(true)
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig>({
+    sponsorVaultAddress: config.sponsorVaultAddress,
+    sponsorshipRegistryAddress: config.sponsorshipRegistryAddress,
+    chainId: config.chainId,
+  })
+
+  const fetchRuntimeConfig = useCallback(async () => {
+    try {
+      const response = await fetch('/api/config')
+      if (response.ok) {
+        const data = await response.json()
+        setRuntimeConfig({
+          sponsorVaultAddress: data.sponsorVaultAddress || null,
+          sponsorshipRegistryAddress: data.sponsorshipRegistryAddress || null,
+          chainId: data.chainId ?? config.chainId,
+        })
+      }
+    } catch {
+      // Fall back to build-time config (already set as initial state)
+    }
+  }, [])
 
   const checkAllStatuses = useCallback(async () => {
     setLoading(true)
@@ -85,10 +112,11 @@ export function InfraRefresh() {
     setLoading(false)
   }, [])
 
-  // Check statuses on mount
+  // Fetch runtime config and check statuses on mount
   useEffect(() => {
+    fetchRuntimeConfig()
     checkAllStatuses()
-  }, [checkAllStatuses])
+  }, [fetchRuntimeConfig, checkAllStatuses])
 
   return (
     <div className="space-y-8">
@@ -139,13 +167,13 @@ export function InfraRefresh() {
           <div className="flex flex-col gap-1 sm:flex-row sm:justify-between">
             <dt className="text-sm text-foreground-muted">Chain ID</dt>
             <dd className="font-mono text-sm text-foreground">
-              {config.chainId}
+              {runtimeConfig.chainId}
             </dd>
           </div>
           <div className="flex flex-col gap-1 sm:flex-row sm:justify-between">
             <dt className="text-sm text-foreground-muted">SponsorVault</dt>
             <dd className="font-mono text-sm text-foreground break-all">
-              {config.sponsorVaultAddress || 'Not configured'}
+              {runtimeConfig.sponsorVaultAddress || 'Not configured'}
             </dd>
           </div>
           <div className="flex flex-col gap-1 sm:flex-row sm:justify-between">
@@ -153,7 +181,7 @@ export function InfraRefresh() {
               SponsorshipRegistry
             </dt>
             <dd className="font-mono text-sm text-foreground break-all">
-              {config.sponsorshipRegistryAddress || 'Not configured'}
+              {runtimeConfig.sponsorshipRegistryAddress || 'Not configured'}
             </dd>
           </div>
         </dl>
