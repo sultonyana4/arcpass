@@ -11,6 +11,8 @@ const navLinks = [
   { href: "/infrastructure", label: "Infrastructure" },
 ];
 
+const DOCS_URL = "https://docs.arcpass.vibepas.xyz";
+
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
   return pathname.startsWith(href);
@@ -46,6 +48,30 @@ export function Header() {
               </Link>
             </li>
           ))}
+          <li>
+            <a
+              href={DOCS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-sm text-foreground-secondary transition-colors hover:text-foreground"
+            >
+              Documentation
+              <svg
+                className="h-3.5 w-3.5"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={1.5}
+                stroke="currentColor"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+                />
+              </svg>
+            </a>
+          </li>
         </ul>
 
         {/* Mobile menu button */}
@@ -109,6 +135,31 @@ export function Header() {
                 </Link>
               </li>
             ))}
+            <li>
+              <a
+                href={DOCS_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setMobileMenuOpen(false)}
+                className="flex min-h-[44px] items-center gap-1 rounded-md px-3 text-sm text-foreground-secondary transition-colors hover:text-foreground hover:bg-background-tertiary"
+              >
+                Documentation
+                <svg
+                  className="h-3.5 w-3.5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={1.5}
+                  stroke="currentColor"
+                  aria-hidden="true"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+                  />
+                </svg>
+              </a>
+            </li>
           </ul>
         </div>
       )}
