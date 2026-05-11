@@ -31,19 +31,39 @@ export function validateWalletNotBlocked(wallet) {
 }
 
 /**
- * Validates that a wallet does not have an active pending sponsorship request.
+ * Validates that a wallet is eligible for a new sponsorship request.
+ *
+ * Rejection rules:
+ * - If any sponsorship in `pending`, `approved`, or `relayed` status exists → 400 "sponsorship already in progress"
+ * - If any `completed` sponsorship exists → 400 "wallet has already been sponsored"
+ * - Allow new request only if most recent is `failed`/`rejected` with no `completed`
+ *
+ * For concurrent submissions, the processor uses row-level locking (SELECT FOR UPDATE SKIP LOCKED),
+ * so this API-side validation checks current state as a first line of defense.
+ *
  * @param {string} walletId - The wallet ID to check
- * @throws {ValidationError} if the wallet already has a pending sponsorship request
+ * @throws {ValidationError} if the wallet is not eligible for a new sponsorship
  */
 export async function validateNoPendingRequest(walletId) {
-  const pendingRequest = await prisma.sponsorshipRequest.findFirst({
+  const activeRequest = await prisma.sponsorshipRequest.findFirst({
     where: {
       walletId,
-      status: 'pending',
+      status: { in: ['pending', 'approved', 'relayed'] },
     },
   })
 
-  if (pendingRequest) {
-    throw new ValidationError('Wallet already has a pending sponsorship request')
+  if (activeRequest) {
+    throw new ValidationError('sponsorship already in progress')
+  }
+
+  const completedRequest = await prisma.sponsorshipRequest.findFirst({
+    where: {
+      walletId,
+      status: 'completed',
+    },
+  })
+
+  if (completedRequest) {
+    throw new ValidationError('wallet has already been sponsored')
   }
 }

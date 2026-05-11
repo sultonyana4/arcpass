@@ -16,6 +16,8 @@
   },
   "devDependencies": {
     "fast-check": "^4.7.0",
+    "fastify": "^5.8.5",
+    "fastify-plugin": "^5.1.0",
     "turbo": "^2.9.12",
     "vitest": "^3.2.3"
   }

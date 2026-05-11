@@ -6,7 +6,12 @@ const mockExit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) =
   throw new Error(`process.exit(${code})`)
 }) as any)
 
-const mockConsoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+// Mock process.stderr.write to capture error output
+let stderrOutput = ''
+const mockStderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: any) => {
+  stderrOutput += typeof chunk === 'string' ? chunk : chunk.toString()
+  return true
+}) as any)
 
 // Base valid env vars (all required vars present)
 const baseEnv: Record<string, string> = {
@@ -36,7 +41,8 @@ describe('loadConfig', () => {
     delete process.env.CHAIN_ID_VERIFY_TIMEOUT_MS
     delete process.env.EXPLORER_BASE_URL
     mockExit.mockClear()
-    mockConsoleError.mockClear()
+    mockStderrWrite.mockClear()
+    stderrOutput = ''
   })
 
   afterEach(() => {
@@ -47,6 +53,11 @@ describe('loadConfig', () => {
     Object.entries(baseEnv).forEach(([key, value]) => {
       process.env[key] = value
     })
+  }
+
+  /** Helper to get the error message written to stderr */
+  function getStderrMessage(): string {
+    return stderrOutput.trim()
   }
 
   describe('new required fields', () => {
@@ -101,8 +112,8 @@ describe('loadConfig', () => {
     it('reports all missing required vars in a single error', () => {
       // Don't set any env vars
       expect(() => loadConfig()).toThrow('process.exit')
-      expect(mockConsoleError).toHaveBeenCalledTimes(1)
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(mockStderrWrite).toHaveBeenCalledTimes(1)
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('DATABASE_URL')
       expect(errorMsg).toContain('CHAIN_RPC_URL')
       expect(errorMsg).toContain('SPONSOR_PRIVATE_KEY')
@@ -118,13 +129,21 @@ describe('loadConfig', () => {
       // Missing: CHAIN_ID, CONTRACT_ADDRESS_SPONSOR_VAULT, CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY
 
       expect(() => loadConfig()).toThrow('process.exit')
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('CHAIN_ID')
       expect(errorMsg).toContain('CONTRACT_ADDRESS_SPONSOR_VAULT')
       expect(errorMsg).toContain('CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY')
       expect(errorMsg).not.toContain('DATABASE_URL')
       expect(errorMsg).not.toContain('CHAIN_RPC_URL')
       expect(errorMsg).not.toContain('SPONSOR_PRIVATE_KEY')
+    })
+
+    it('rejects whitespace-only required vars as missing', () => {
+      setBaseEnv()
+      process.env.DATABASE_URL = '   '
+      expect(() => loadConfig()).toThrow('process.exit')
+      const errorMsg = getStderrMessage()
+      expect(errorMsg).toContain('DATABASE_URL')
     })
   })
 
@@ -137,8 +156,8 @@ describe('loadConfig', () => {
       process.env.CONTRACT_ADDRESS_SPONSOR_VAULT = 'invalid'
 
       expect(() => loadConfig()).toThrow('process.exit')
-      expect(mockConsoleError).toHaveBeenCalledTimes(1)
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(mockStderrWrite).toHaveBeenCalledTimes(1)
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('CHAIN_RPC_URL')
       expect(errorMsg).toContain('CHAIN_ID')
       expect(errorMsg).toContain('SPONSOR_PRIVATE_KEY')
@@ -154,10 +173,89 @@ describe('loadConfig', () => {
       process.env.CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY = '0x' + 'b'.repeat(40)
 
       expect(() => loadConfig()).toThrow('process.exit')
-      expect(mockConsoleError).toHaveBeenCalledTimes(1)
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      expect(mockStderrWrite).toHaveBeenCalledTimes(1)
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('DATABASE_URL')
       expect(errorMsg).toContain('CHAIN_RPC_URL')
+    })
+  })
+
+  describe('CHAIN_RPC_URL validation', () => {
+    it('accepts http:// prefix', () => {
+      setBaseEnv()
+      process.env.CHAIN_RPC_URL = 'http://localhost:8545'
+      const config = loadConfig()
+      expect(config.chainRpcUrl).toBe('http://localhost:8545')
+    })
+
+    it('accepts https:// prefix', () => {
+      setBaseEnv()
+      process.env.CHAIN_RPC_URL = 'https://rpc.example.com'
+      const config = loadConfig()
+      expect(config.chainRpcUrl).toBe('https://rpc.example.com')
+    })
+
+    it('rejects ftp:// prefix', () => {
+      setBaseEnv()
+      process.env.CHAIN_RPC_URL = 'ftp://rpc.example.com'
+      expect(() => loadConfig()).toThrow('process.exit')
+      const errorMsg = getStderrMessage()
+      expect(errorMsg).toContain('CHAIN_RPC_URL')
+    })
+
+    it('rejects ws:// prefix', () => {
+      setBaseEnv()
+      process.env.CHAIN_RPC_URL = 'ws://rpc.example.com'
+      expect(() => loadConfig()).toThrow('process.exit')
+      const errorMsg = getStderrMessage()
+      expect(errorMsg).toContain('CHAIN_RPC_URL')
+    })
+  })
+
+  describe('SPONSOR_PRIVATE_KEY validation', () => {
+    it('accepts 64-char hex without 0x prefix', () => {
+      setBaseEnv()
+      process.env.SPONSOR_PRIVATE_KEY = 'a'.repeat(64)
+      const config = loadConfig()
+      expect(config.sponsorPrivateKey).toBe('a'.repeat(64))
+    })
+
+    it('accepts 64-char hex with 0x prefix', () => {
+      setBaseEnv()
+      process.env.SPONSOR_PRIVATE_KEY = '0x' + 'b'.repeat(64)
+      const config = loadConfig()
+      expect(config.sponsorPrivateKey).toBe('0x' + 'b'.repeat(64))
+    })
+
+    it('accepts mixed-case hex', () => {
+      setBaseEnv()
+      process.env.SPONSOR_PRIVATE_KEY = 'aAbBcCdDeEfF00112233445566778899aAbBcCdDeEfF00112233445566778899'
+      const config = loadConfig()
+      expect(config.sponsorPrivateKey).toBe('aAbBcCdDeEfF00112233445566778899aAbBcCdDeEfF00112233445566778899')
+    })
+
+    it('rejects key shorter than 64 chars', () => {
+      setBaseEnv()
+      process.env.SPONSOR_PRIVATE_KEY = 'a'.repeat(63)
+      expect(() => loadConfig()).toThrow('process.exit')
+      const errorMsg = getStderrMessage()
+      expect(errorMsg).toContain('SPONSOR_PRIVATE_KEY')
+    })
+
+    it('rejects key longer than 64 chars (without 0x)', () => {
+      setBaseEnv()
+      process.env.SPONSOR_PRIVATE_KEY = 'a'.repeat(65)
+      expect(() => loadConfig()).toThrow('process.exit')
+      const errorMsg = getStderrMessage()
+      expect(errorMsg).toContain('SPONSOR_PRIVATE_KEY')
+    })
+
+    it('rejects non-hex characters', () => {
+      setBaseEnv()
+      process.env.SPONSOR_PRIVATE_KEY = 'g'.repeat(64)
+      expect(() => loadConfig()).toThrow('process.exit')
+      const errorMsg = getStderrMessage()
+      expect(errorMsg).toContain('SPONSOR_PRIVATE_KEY')
     })
   })
 
@@ -166,7 +264,7 @@ describe('loadConfig', () => {
       setBaseEnv()
       process.env.CHAIN_ID = '3.14'
       expect(() => loadConfig()).toThrow('process.exit')
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('CHAIN_ID')
     })
 
@@ -174,7 +272,7 @@ describe('loadConfig', () => {
       setBaseEnv()
       process.env.CHAIN_ID = '0'
       expect(() => loadConfig()).toThrow('process.exit')
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('CHAIN_ID')
     })
 
@@ -182,7 +280,7 @@ describe('loadConfig', () => {
       setBaseEnv()
       process.env.CHAIN_ID = '-1'
       expect(() => loadConfig()).toThrow('process.exit')
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('CHAIN_ID')
     })
 
@@ -190,8 +288,15 @@ describe('loadConfig', () => {
       setBaseEnv()
       process.env.CHAIN_ID = 'abc'
       expect(() => loadConfig()).toThrow('process.exit')
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('CHAIN_ID')
+    })
+
+    it('accepts valid positive integer CHAIN_ID', () => {
+      setBaseEnv()
+      process.env.CHAIN_ID = '42161'
+      const config = loadConfig()
+      expect(config.chainId).toBe(42161)
     })
   })
 
@@ -200,7 +305,7 @@ describe('loadConfig', () => {
       setBaseEnv()
       process.env.CONTRACT_ADDRESS_SPONSOR_VAULT = 'a'.repeat(42)
       expect(() => loadConfig()).toThrow('process.exit')
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('CONTRACT_ADDRESS_SPONSOR_VAULT')
     })
 
@@ -208,7 +313,7 @@ describe('loadConfig', () => {
       setBaseEnv()
       process.env.CONTRACT_ADDRESS_SPONSOR_VAULT = '0x' + 'a'.repeat(39)
       expect(() => loadConfig()).toThrow('process.exit')
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('CONTRACT_ADDRESS_SPONSOR_VAULT')
     })
 
@@ -216,7 +321,7 @@ describe('loadConfig', () => {
       setBaseEnv()
       process.env.CONTRACT_ADDRESS_SPONSOR_VAULT = '0x' + 'g'.repeat(40)
       expect(() => loadConfig()).toThrow('process.exit')
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('CONTRACT_ADDRESS_SPONSOR_VAULT')
     })
 
@@ -224,7 +329,7 @@ describe('loadConfig', () => {
       setBaseEnv()
       process.env.CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY = 'invalid'
       expect(() => loadConfig()).toThrow('process.exit')
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY')
     })
 
@@ -241,7 +346,7 @@ describe('loadConfig', () => {
       setBaseEnv()
       process.env.CHAIN_ID_VERIFY_TIMEOUT_MS = '999'
       expect(() => loadConfig()).toThrow('process.exit')
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('CHAIN_ID_VERIFY_TIMEOUT_MS')
     })
 
@@ -249,8 +354,55 @@ describe('loadConfig', () => {
       setBaseEnv()
       process.env.CHAIN_ID_VERIFY_TIMEOUT_MS = '30001'
       expect(() => loadConfig()).toThrow('process.exit')
-      const errorMsg = mockConsoleError.mock.calls[0][0] as string
+      const errorMsg = getStderrMessage()
       expect(errorMsg).toContain('CHAIN_ID_VERIFY_TIMEOUT_MS')
+    })
+  })
+
+  describe('sensitive values never logged', () => {
+    it('never includes DATABASE_URL value in error output', () => {
+      setBaseEnv()
+      process.env.DATABASE_URL = 'postgresql://user:secret@host:5432/db'
+      process.env.CHAIN_ID = 'invalid'
+      expect(() => loadConfig()).toThrow('process.exit')
+      const errorMsg = getStderrMessage()
+      expect(errorMsg).not.toContain('postgresql://user:secret@host:5432/db')
+      expect(errorMsg).not.toContain('secret')
+    })
+
+    it('never includes SPONSOR_PRIVATE_KEY value in error output', () => {
+      setBaseEnv()
+      process.env.SPONSOR_PRIVATE_KEY = 'deadbeef'.repeat(8)
+      process.env.CHAIN_ID = 'invalid'
+      expect(() => loadConfig()).toThrow('process.exit')
+      const errorMsg = getStderrMessage()
+      expect(errorMsg).not.toContain('deadbeef'.repeat(8))
+    })
+
+    it('only includes variable names in error output', () => {
+      // All vars missing
+      expect(() => loadConfig()).toThrow('process.exit')
+      const errorMsg = getStderrMessage()
+      // Should only contain variable names, not values
+      expect(errorMsg).toMatch(/^Invalid or missing environment variables:/)
+      expect(errorMsg).toContain('DATABASE_URL')
+      expect(errorMsg).toContain('CHAIN_RPC_URL')
+    })
+  })
+
+  describe('frozen config object', () => {
+    it('returns a frozen config object', () => {
+      setBaseEnv()
+      const config = loadConfig()
+      expect(Object.isFrozen(config)).toBe(true)
+    })
+
+    it('prevents mutation of config properties', () => {
+      setBaseEnv()
+      const config = loadConfig()
+      expect(() => {
+        ;(config as any).chainId = 9999
+      }).toThrow()
     })
   })
 
@@ -258,6 +410,11 @@ describe('loadConfig', () => {
     it('calls process.exit(1) on validation failure', () => {
       expect(() => loadConfig()).toThrow('process.exit(1)')
       expect(mockExit).toHaveBeenCalledWith(1)
+    })
+
+    it('writes error to stderr (not stdout)', () => {
+      expect(() => loadConfig()).toThrow('process.exit')
+      expect(mockStderrWrite).toHaveBeenCalled()
     })
   })
 })

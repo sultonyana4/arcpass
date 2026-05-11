@@ -11,6 +11,14 @@ vi.mock('../src/services/relay.service.js', () => ({
   getRelayTransactionByHash: vi.fn(),
 }))
 
+vi.mock('../src/services/rate-limit.service.js', () => ({
+  checkWalletRateLimit: vi.fn().mockResolvedValue(undefined),
+  incrementWalletRequestCount: vi.fn().mockResolvedValue(undefined),
+  checkIpRateLimit: vi.fn().mockResolvedValue(undefined),
+  incrementIpRequestCount: vi.fn().mockResolvedValue(undefined),
+  getClientIp: vi.fn().mockReturnValue('127.0.0.1'),
+}))
+
 import { createSponsorshipRequest, getSponsorshipRequest } from '../src/services/sponsorship.service.js'
 import { getRelayTransactionByHash } from '../src/services/relay.service.js'
 import sponsorshipRoutes from '../src/routes/sponsorship.js'

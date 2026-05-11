@@ -1,14 +1,16 @@
 import { registerWallet, lookupWallet, getWalletHistory } from '../services/wallet.service.js'
 import { WalletNotFoundError } from '../lib/errors.js'
-import { isValidWalletAddress } from '../lib/wallet-validation.js'
-import { ValidationError } from '../lib/errors.js'
 
 const registerSchema = {
   body: {
     type: 'object',
     required: ['walletAddress'],
     properties: {
-      walletAddress: { type: 'string' },
+      walletAddress: {
+        type: 'string',
+        pattern: '^0x[0-9a-fA-F]{40}$',
+        maxLength: 42,
+      },
     },
     additionalProperties: false,
   },
@@ -19,8 +21,13 @@ const lookupSchema = {
     type: 'object',
     required: ['address'],
     properties: {
-      address: { type: 'string' },
+      address: {
+        type: 'string',
+        pattern: '^0x[0-9a-fA-F]{40}$',
+        maxLength: 42,
+      },
     },
+    additionalProperties: false,
   },
 }
 
@@ -29,13 +36,18 @@ const historySchema = {
     type: 'object',
     required: ['address'],
     properties: {
-      address: { type: 'string' },
+      address: {
+        type: 'string',
+        pattern: '^0x[0-9a-fA-F]{40}$',
+        maxLength: 42,
+      },
     },
+    additionalProperties: false,
   },
   querystring: {
     type: 'object',
     properties: {
-      cursor: { type: 'string', format: 'uuid' },
+      cursor: { type: 'string', format: 'uuid', maxLength: 36 },
       limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
     },
     additionalProperties: false,
@@ -75,10 +87,6 @@ export default async function walletRoutes(fastify, opts) {
   fastify.get('/:address/history', { schema: historySchema }, async (request, reply) => {
     const { address } = request.params
     const { cursor, limit } = request.query || {}
-
-    if (!isValidWalletAddress(address)) {
-      throw new ValidationError('Invalid wallet address format')
-    }
 
     const result = await getWalletHistory(address, {
       cursor: cursor || null,

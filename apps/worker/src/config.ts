@@ -26,7 +26,7 @@ const CONTRACT_ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/
 export function loadConfig(): WorkerConfig {
   const errors: string[] = []
 
-  // 1. Check all required environment variables are present
+  // 1. Check all required environment variables are present (non-empty after trimming)
   const requiredVars = [
     'DATABASE_URL',
     'CHAIN_RPC_URL',
@@ -36,17 +36,19 @@ export function loadConfig(): WorkerConfig {
     'CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY',
   ] as const
 
-  const missing = requiredVars.filter((name) => !process.env[name])
+  const missing = requiredVars.filter(
+    (name) => !process.env[name] || process.env[name]!.trim() === ''
+  )
   if (missing.length > 0) {
     errors.push(...missing)
   }
 
   // 2. Format validation for present required variables
-  const chainRpcUrl = process.env.CHAIN_RPC_URL ?? ''
-  const sponsorPrivateKey = process.env.SPONSOR_PRIVATE_KEY ?? ''
-  const chainIdRaw = process.env.CHAIN_ID ?? ''
-  const contractAddressSponsorVault = process.env.CONTRACT_ADDRESS_SPONSOR_VAULT ?? ''
-  const contractAddressSponsorshipRegistry = process.env.CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY ?? ''
+  const chainRpcUrl = (process.env.CHAIN_RPC_URL ?? '').trim()
+  const sponsorPrivateKey = (process.env.SPONSOR_PRIVATE_KEY ?? '').trim()
+  const chainIdRaw = (process.env.CHAIN_ID ?? '').trim()
+  const contractAddressSponsorVault = (process.env.CONTRACT_ADDRESS_SPONSOR_VAULT ?? '').trim()
+  const contractAddressSponsorshipRegistry = (process.env.CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY ?? '').trim()
 
   // Only validate format if the variable is present (missing is already reported)
   if (chainRpcUrl && !chainRpcUrl.startsWith('http://') && !chainRpcUrl.startsWith('https://')) {
@@ -108,8 +110,9 @@ export function loadConfig(): WorkerConfig {
   // Deduplicate errors (a variable could appear in both missing and format checks)
   const uniqueErrors = [...new Set(errors)]
   if (uniqueErrors.length > 0) {
-    console.error(
-      `Invalid or missing environment variables: ${uniqueErrors.join(', ')}`
+    // Only log variable names — never log sensitive values (Requirement 14.4)
+    process.stderr.write(
+      `Invalid or missing environment variables: ${uniqueErrors.join(', ')}\n`
     )
     process.exit(1)
   }
@@ -119,8 +122,9 @@ export function loadConfig(): WorkerConfig {
     process.env.EXPLORER_BASE_URL || 'https://testnet.arcscan.io/tx/'
   )
 
-  return {
-    databaseUrl: process.env.DATABASE_URL!,
+  // Return frozen config object to prevent accidental mutation (Requirement 8.8)
+  return Object.freeze({
+    databaseUrl: process.env.DATABASE_URL!.trim(),
     chainRpcUrl,
     sponsorPrivateKey,
     pollIntervalMs,
@@ -136,7 +140,7 @@ export function loadConfig(): WorkerConfig {
     sponsorshipAmount,
     chainIdVerifyTimeoutMs,
     explorerBaseUrl,
-  }
+  })
 }
 
 function parseNumericEnvCollect(name: string, defaultValue: number, errors: string[]): number {

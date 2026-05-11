@@ -52,6 +52,10 @@ export function initializeRelayExecutor(clients: {
  * Delegates to the contract integration layer (executeContractRelay) which calls
  * SponsorVault.sponsorTransfer on-chain.
  *
+ * Uses an AbortController with TX_TIMEOUT_MS deadline to enforce bounded
+ * transaction confirmation wait times. If the timeout fires before the contract
+ * relay completes, returns a failed RelayResult with a timeout failure reason.
+ *
  * @param sponsorshipRequestId - The ID of the sponsorship request to relay
  * @param relayTransactionId - The relay transaction ID for structured logging
  * @param relayAttempt - The current relay attempt number (for structured logging)
@@ -97,14 +101,25 @@ export async function executeRelay(
       walletAddress,
     })
 
-    // Step 2: Delegate to contract client for on-chain execution
-    const contractResult = await executeContractRelay(walletAddress, sponsorshipAmount, {
-      sponsorshipRequestId,
-      relayTransactionId,
-      relayAttempt,
-    })
+    // Step 2: Set up AbortController with TX_TIMEOUT_MS deadline
+    const abortController = new AbortController()
+    const timeoutId = setTimeout(() => abortController.abort(), txTimeoutMs)
 
-    // Step 3: Map ContractRelayResult to RelayResult and log outcome
+    let contractResult: Awaited<ReturnType<typeof executeContractRelay>>
+
+    try {
+      // Step 3: Race the contract relay against the abort signal
+      contractResult = await executeContractRelayWithAbort(
+        walletAddress,
+        sponsorshipAmount,
+        { sponsorshipRequestId, relayTransactionId, relayAttempt },
+        abortController.signal
+      )
+    } finally {
+      clearTimeout(timeoutId)
+    }
+
+    // Step 4: Map ContractRelayResult to RelayResult and log outcome
     if (contractResult.success) {
       logger.info('Relay execution outcome', {
         sponsorshipRequestId,
@@ -138,8 +153,28 @@ export async function executeRelay(
       eventData: contractResult.eventData,
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
     const elapsedMs = Date.now() - startTime
+
+    // Check if the error is an abort (timeout) signal
+    if (error instanceof Error && error.name === 'AbortError') {
+      logger.error('Transaction confirmation timeout', {
+        sponsorshipRequestId,
+        relayTransactionId,
+        transactionHash: null,
+        elapsedMs,
+      })
+
+      return {
+        success: false,
+        transactionHash: null,
+        failureReason: 'Transaction confirmation timeout',
+        blockNumber: null,
+        explorerUrl: null,
+        eventData: null,
+      }
+    }
+
+    const message = error instanceof Error ? error.message : String(error)
 
     logger.error('Relay execution outcome', {
       sponsorshipRequestId,
@@ -160,4 +195,43 @@ export async function executeRelay(
       eventData: null,
     }
   }
+}
+
+/**
+ * Wraps executeContractRelay with abort signal support.
+ * If the signal is aborted before the relay completes, throws an AbortError.
+ */
+async function executeContractRelayWithAbort(
+  walletAddress: `0x${string}`,
+  amount: bigint,
+  context: { sponsorshipRequestId: string; relayTransactionId: string; relayAttempt?: number },
+  signal: AbortSignal
+): Promise<Awaited<ReturnType<typeof executeContractRelay>>> {
+  // If already aborted before we start, throw immediately
+  if (signal.aborted) {
+    const err = new Error('Transaction confirmation timeout')
+    err.name = 'AbortError'
+    throw err
+  }
+
+  // Race the contract relay against the abort signal
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      const err = new Error('Transaction confirmation timeout')
+      err.name = 'AbortError'
+      reject(err)
+    }
+
+    signal.addEventListener('abort', onAbort, { once: true })
+
+    executeContractRelay(walletAddress, amount, context)
+      .then((result) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(result)
+      })
+      .catch((err) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(err)
+      })
+  })
 }

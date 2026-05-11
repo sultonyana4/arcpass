@@ -1,13 +1,18 @@
 import { createSponsorshipRequest, getSponsorshipRequest } from '../services/sponsorship.service.js'
 import { getRelayTransactionByHash } from '../services/relay.service.js'
 import { normalizeWalletAddress } from '../lib/wallet-validation.js'
+import { checkWalletRateLimit, incrementWalletRequestCount } from '../services/rate-limit.service.js'
 
 const createRequestSchema = {
   body: {
     type: 'object',
     required: ['walletAddress'],
     properties: {
-      walletAddress: { type: 'string', minLength: 42, maxLength: 44 },
+      walletAddress: {
+        type: 'string',
+        pattern: '^0x[0-9a-fA-F]{40}$',
+        maxLength: 42,
+      },
     },
     additionalProperties: false,
   },
@@ -20,6 +25,7 @@ const getRequestSchema = {
     properties: {
       id: { type: 'string', format: 'uuid' },
     },
+    additionalProperties: false,
   },
 }
 
@@ -28,13 +34,26 @@ const getTxByHashSchema = {
     type: 'object',
     required: ['hash'],
     properties: {
-      hash: { type: 'string', minLength: 1, maxLength: 255 },
+      hash: { type: 'string', minLength: 1, maxLength: 1024 },
     },
+    additionalProperties: false,
   },
 }
 
 export default async function sponsorshipRoutes(fastify, opts) {
-  fastify.post('/request', { schema: createRequestSchema }, async (request, reply) => {
+  // Wallet rate limiting preHandler for POST /request
+  const walletRateLimitHandler = async (request) => {
+    const walletAddress = request.body?.walletAddress
+    if (walletAddress) {
+      await checkWalletRateLimit(walletAddress)
+      await incrementWalletRequestCount(walletAddress)
+    }
+  }
+
+  fastify.post('/request', {
+    schema: createRequestSchema,
+    preHandler: [walletRateLimitHandler],
+  }, async (request, reply) => {
     const walletAddress = normalizeWalletAddress(request.body.walletAddress)
     const ipAddress = request.headers['x-forwarded-for'] || request.ip
     const userAgent = request.headers['user-agent'] || null

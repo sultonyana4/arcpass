@@ -1,9 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-// Mock prisma
-const mockFindFirst = vi.fn()
-const mockCreate = vi.fn()
-const mockUpdate = vi.fn()
+// Use vi.hoisted to define mocks that are referenced in vi.mock factories
+const { mockFindFirst, mockCreate, mockUpdate, mockConfig } = vi.hoisted(() => {
+  return {
+    mockFindFirst: vi.fn(),
+    mockCreate: vi.fn(),
+    mockUpdate: vi.fn(),
+    mockConfig: {
+      rateLimitIpMax: 10,
+      rateLimitWindowMs: 3600000,
+      rateLimitBlockDurationMs: 900000,
+      rateLimitWalletMax: 5,
+    },
+  }
+})
 
 vi.mock('@arcpass/shared', () => ({
   prisma: {
@@ -15,33 +25,76 @@ vi.mock('@arcpass/shared', () => ({
   },
 }))
 
-describe('Rate Limit Service', () => {
-  let checkIpRateLimit
-  let incrementIpRequestCount
-  let checkWalletRateLimit
-  let incrementWalletRequestCount
-  let blockIdentifier
-  let RateLimitError
+vi.mock('../src/lib/config.js', () => ({
+  config: mockConfig,
+}))
 
-  beforeEach(async () => {
-    vi.resetModules()
-    vi.unstubAllEnvs()
+import {
+  checkIpRateLimit,
+  incrementIpRequestCount,
+  checkWalletRateLimit,
+  incrementWalletRequestCount,
+  blockIdentifier,
+  getClientIp,
+} from '../src/services/rate-limit.service.js'
+import { RateLimitError } from '../src/lib/errors.js'
+
+describe('Rate Limit Service', () => {
+  beforeEach(() => {
     mockFindFirst.mockReset()
     mockCreate.mockReset()
     mockUpdate.mockReset()
-
-    const mod = await import('../src/services/rate-limit.service.js')
-    const errors = await import('../src/lib/errors.js')
-    checkIpRateLimit = mod.checkIpRateLimit
-    incrementIpRequestCount = mod.incrementIpRequestCount
-    checkWalletRateLimit = mod.checkWalletRateLimit
-    incrementWalletRequestCount = mod.incrementWalletRequestCount
-    blockIdentifier = mod.blockIdentifier
-    RateLimitError = errors.RateLimitError
+    // Reset config to defaults
+    mockConfig.rateLimitIpMax = 10
+    mockConfig.rateLimitWindowMs = 3600000
+    mockConfig.rateLimitBlockDurationMs = 900000
+    mockConfig.rateLimitWalletMax = 5
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  describe('getClientIp', () => {
+    it('should return X-Forwarded-For header value when present', () => {
+      const request = {
+        headers: { 'x-forwarded-for': '203.0.113.50' },
+        ip: '10.0.0.1',
+      }
+      expect(getClientIp(request)).toBe('203.0.113.50')
+    })
+
+    it('should return first IP from X-Forwarded-For when multiple are present', () => {
+      const request = {
+        headers: { 'x-forwarded-for': '203.0.113.50, 70.41.3.18, 150.172.238.178' },
+        ip: '10.0.0.1',
+      }
+      expect(getClientIp(request)).toBe('203.0.113.50')
+    })
+
+    it('should trim whitespace from X-Forwarded-For value', () => {
+      const request = {
+        headers: { 'x-forwarded-for': '  203.0.113.50  , 70.41.3.18' },
+        ip: '10.0.0.1',
+      }
+      expect(getClientIp(request)).toBe('203.0.113.50')
+    })
+
+    it('should fallback to request.ip when X-Forwarded-For is not present', () => {
+      const request = {
+        headers: {},
+        ip: '10.0.0.1',
+      }
+      expect(getClientIp(request)).toBe('10.0.0.1')
+    })
+
+    it('should fallback to request.ip when X-Forwarded-For is empty string', () => {
+      const request = {
+        headers: { 'x-forwarded-for': '' },
+        ip: '10.0.0.1',
+      }
+      expect(getClientIp(request)).toBe('10.0.0.1')
+    })
   })
 
   describe('checkIpRateLimit', () => {
@@ -147,13 +200,8 @@ describe('Rate Limit Service', () => {
       await expect(checkIpRateLimit('10.0.0.1')).resolves.toBeUndefined()
     })
 
-    it('should respect RATE_LIMIT_IP_MAX env var', async () => {
-      vi.stubEnv('RATE_LIMIT_IP_MAX', '5')
-
-      // Re-import to pick up env change
-      vi.resetModules()
-      const mod = await import('../src/services/rate-limit.service.js')
-      const errors = await import('../src/lib/errors.js')
+    it('should respect custom rateLimitIpMax from config', async () => {
+      mockConfig.rateLimitIpMax = 5
 
       const windowStart = new Date(Date.now() - 30 * 60 * 1000)
       mockFindFirst.mockResolvedValue({
@@ -165,15 +213,12 @@ describe('Rate Limit Service', () => {
         blockedUntil: null,
       })
 
-      await expect(mod.checkIpRateLimit('10.0.0.1')).rejects.toThrow(errors.RateLimitError)
+      await expect(checkIpRateLimit('10.0.0.1')).rejects.toThrow(RateLimitError)
     })
 
-    it('should respect RATE_LIMIT_WINDOW_MS env var', async () => {
+    it('should respect custom rateLimitWindowMs from config', async () => {
       // Set window to 5 minutes
-      vi.stubEnv('RATE_LIMIT_WINDOW_MS', '300000')
-
-      vi.resetModules()
-      const mod = await import('../src/services/rate-limit.service.js')
+      mockConfig.rateLimitWindowMs = 300000
 
       // Window started 6 minutes ago — should be expired with 5min window
       const windowStart = new Date(Date.now() - 6 * 60 * 1000)
@@ -186,7 +231,7 @@ describe('Rate Limit Service', () => {
         blockedUntil: null,
       })
 
-      await expect(mod.checkIpRateLimit('10.0.0.1')).resolves.toBeUndefined()
+      await expect(checkIpRateLimit('10.0.0.1')).resolves.toBeUndefined()
     })
   })
 
@@ -262,6 +307,32 @@ describe('Rate Limit Service', () => {
           blockedUntil: expect.any(Date),
         },
       })
+    })
+
+    it('should set blockedUntil using config.rateLimitBlockDurationMs', async () => {
+      mockConfig.rateLimitBlockDurationMs = 60000 // 1 minute
+
+      const windowStart = new Date(Date.now() - 30 * 60 * 1000)
+      const existing = {
+        id: 'rec-1',
+        identifier: '10.0.0.1',
+        identifierType: 'ip',
+        requestCount: 9,
+        windowStart,
+        blockedUntil: null,
+      }
+      mockFindFirst.mockResolvedValue(existing)
+      mockUpdate.mockResolvedValue({})
+
+      const before = Date.now()
+      await incrementIpRequestCount('10.0.0.1')
+      const after = Date.now()
+
+      const updateCall = mockUpdate.mock.calls[0][0]
+      const blockedUntil = updateCall.data.blockedUntil.getTime()
+
+      expect(blockedUntil).toBeGreaterThanOrEqual(before + 60000)
+      expect(blockedUntil).toBeLessThanOrEqual(after + 60000)
     })
 
     it('should reset counter when window has expired', async () => {
@@ -406,6 +477,27 @@ describe('Rate Limit Service', () => {
       await expect(checkWalletRateLimit('0xabc123')).rejects.toThrow(RateLimitError)
     })
 
+    it('should include retryAfter when wallet count exceeds limit (not yet blocked)', async () => {
+      const windowStart = new Date(Date.now() - 30 * 60 * 1000)
+      mockFindFirst.mockResolvedValue({
+        id: 'rec-1',
+        identifier: '0xabc123',
+        identifierType: 'wallet',
+        requestCount: 5,
+        windowStart,
+        blockedUntil: null,
+      })
+
+      try {
+        await checkWalletRateLimit('0xabc123')
+      } catch (err) {
+        expect(err).toBeInstanceOf(RateLimitError)
+        expect(err.retryAfter).toBeGreaterThan(0)
+        // retryAfter should be based on block duration (default 900000ms = 900s)
+        expect(err.retryAfter).toBe(Math.ceil(mockConfig.rateLimitBlockDurationMs / 1000))
+      }
+    })
+
     it('should allow request when count is below wallet limit within window', async () => {
       const windowStart = new Date(Date.now() - 30 * 60 * 1000)
       mockFindFirst.mockResolvedValue({
@@ -420,12 +512,8 @@ describe('Rate Limit Service', () => {
       await expect(checkWalletRateLimit('0xabc123')).resolves.toBeUndefined()
     })
 
-    it('should respect RATE_LIMIT_WALLET_MAX env var', async () => {
-      vi.stubEnv('RATE_LIMIT_WALLET_MAX', '3')
-
-      vi.resetModules()
-      const mod = await import('../src/services/rate-limit.service.js')
-      const errors = await import('../src/lib/errors.js')
+    it('should respect custom rateLimitWalletMax from config', async () => {
+      mockConfig.rateLimitWalletMax = 3
 
       const windowStart = new Date(Date.now() - 30 * 60 * 1000)
       mockFindFirst.mockResolvedValue({
@@ -437,14 +525,11 @@ describe('Rate Limit Service', () => {
         blockedUntil: null,
       })
 
-      await expect(mod.checkWalletRateLimit('0xabc123')).rejects.toThrow(errors.RateLimitError)
+      await expect(checkWalletRateLimit('0xabc123')).rejects.toThrow(RateLimitError)
     })
 
-    it('should respect RATE_LIMIT_WINDOW_MS env var for wallet checks', async () => {
-      vi.stubEnv('RATE_LIMIT_WINDOW_MS', '300000') // 5 minutes
-
-      vi.resetModules()
-      const mod = await import('../src/services/rate-limit.service.js')
+    it('should respect custom rateLimitWindowMs from config for wallet checks', async () => {
+      mockConfig.rateLimitWindowMs = 300000 // 5 minutes
 
       // Window started 6 minutes ago — should be expired with 5min window
       const windowStart = new Date(Date.now() - 6 * 60 * 1000)
@@ -457,7 +542,7 @@ describe('Rate Limit Service', () => {
         blockedUntil: null,
       })
 
-      await expect(mod.checkWalletRateLimit('0xabc123')).resolves.toBeUndefined()
+      await expect(checkWalletRateLimit('0xabc123')).resolves.toBeUndefined()
     })
   })
 
@@ -653,7 +738,9 @@ describe('Rate Limit Service', () => {
       expect(blockedUntil).toBeLessThanOrEqual(after + 30_000)
     })
 
-    it('should use default 15 minute duration when no duration provided', async () => {
+    it('should use config.rateLimitBlockDurationMs when no duration provided', async () => {
+      mockConfig.rateLimitBlockDurationMs = 900000 // 15 minutes
+
       mockFindFirst.mockResolvedValue(null)
       mockCreate.mockResolvedValue({})
 
@@ -664,22 +751,18 @@ describe('Rate Limit Service', () => {
       const createCall = mockCreate.mock.calls[0][0]
       const blockedUntil = createCall.data.blockedUntil.getTime()
 
-      const fifteenMinutes = 15 * 60 * 1000
-      expect(blockedUntil).toBeGreaterThanOrEqual(before + fifteenMinutes)
-      expect(blockedUntil).toBeLessThanOrEqual(after + fifteenMinutes)
+      expect(blockedUntil).toBeGreaterThanOrEqual(before + 900000)
+      expect(blockedUntil).toBeLessThanOrEqual(after + 900000)
     })
 
-    it('should respect RATE_LIMIT_BLOCK_DURATION_MS env var', async () => {
-      vi.stubEnv('RATE_LIMIT_BLOCK_DURATION_MS', '60000') // 1 minute
-
-      vi.resetModules()
-      const mod = await import('../src/services/rate-limit.service.js')
+    it('should respect custom rateLimitBlockDurationMs from config', async () => {
+      mockConfig.rateLimitBlockDurationMs = 60000 // 1 minute
 
       mockFindFirst.mockResolvedValue(null)
       mockCreate.mockResolvedValue({})
 
       const before = Date.now()
-      await mod.blockIdentifier('10.0.0.1', 'ip')
+      await blockIdentifier('10.0.0.1', 'ip')
       const after = Date.now()
 
       const createCall = mockCreate.mock.calls[0][0]

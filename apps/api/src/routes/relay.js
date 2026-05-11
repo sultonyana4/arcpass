@@ -7,6 +7,7 @@ const getRelaySchema = {
     properties: {
       id: { type: 'string', format: 'uuid' },
     },
+    additionalProperties: false,
   },
 }
 

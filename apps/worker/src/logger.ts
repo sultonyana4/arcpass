@@ -32,9 +32,20 @@ const SENSITIVE_KEY_PATTERNS = [
 ]
 
 /**
- * Detects credential-bearing URLs (user:pass@host pattern).
+ * Maximum message length before truncation.
  */
-const CREDENTIAL_URL_PATTERN = /^https?:\/\/[^:]+:[^@]+@/i
+const MAX_MESSAGE_LENGTH = 10_000
+
+/**
+ * Maximum recursion depth for sensitive data filtering.
+ */
+const MAX_FILTER_DEPTH = 10
+
+/**
+ * Detects credential-bearing URLs (http(s)://user:pass@host pattern).
+ * Covers all variants including special characters in user/pass.
+ */
+const CREDENTIAL_URL_PATTERN = /^https?:\/\/[^/@]+:[^/@]+@/i
 
 /**
  * Checks if a field key matches any sensitive pattern.
@@ -53,9 +64,14 @@ function isCredentialUrl(value: unknown): boolean {
 /**
  * Recursively strips sensitive fields from a data object.
  * Returns a new object with sensitive fields replaced by '[REDACTED]'.
+ * Objects beyond maxDepth are replaced with '[REDACTED]'.
  * Exported for testing.
  */
-export function filterSensitiveData(data: Record<string, unknown>): Record<string, unknown> {
+export function filterSensitiveData(
+  data: Record<string, unknown>,
+  maxDepth: number = MAX_FILTER_DEPTH,
+  currentDepth: number = 0,
+): Record<string, unknown> {
   const filtered: Record<string, unknown> = {}
 
   for (const [key, value] of Object.entries(data)) {
@@ -64,7 +80,11 @@ export function filterSensitiveData(data: Record<string, unknown>): Record<strin
     } else if (isCredentialUrl(value)) {
       filtered[key] = '[REDACTED_URL]'
     } else if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-      filtered[key] = filterSensitiveData(value as Record<string, unknown>)
+      if (currentDepth + 1 >= maxDepth) {
+        filtered[key] = '[REDACTED]'
+      } else {
+        filtered[key] = filterSensitiveData(value as Record<string, unknown>, maxDepth, currentDepth + 1)
+      }
     } else {
       filtered[key] = value
     }
@@ -79,11 +99,14 @@ export function filterSensitiveData(data: Record<string, unknown>): Record<strin
  */
 export function createLogger(component: LogEntry['component']): Logger {
   function log(level: LogEntry['level'], message: string, data?: Record<string, unknown>): void {
+    const truncatedMessage =
+      message.length > MAX_MESSAGE_LENGTH ? message.slice(0, MAX_MESSAGE_LENGTH) : message
+
     const entry: LogEntry = {
       timestamp: new Date().toISOString(),
       level,
       component,
-      message,
+      message: truncatedMessage,
       ...(data ? filterSensitiveData(data) : {}),
     }
 

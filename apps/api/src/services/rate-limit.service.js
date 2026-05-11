@@ -1,69 +1,22 @@
 import { prisma } from '@arcpass/shared'
+import { config } from '../lib/config.js'
 import { RateLimitError } from '../lib/errors.js'
 
-const DEFAULT_IP_MAX_REQUESTS = 10
-const DEFAULT_WALLET_MAX_REQUESTS = 5
-const DEFAULT_WINDOW_MS = 60 * 60 * 1000 // 1 hour
-const DEFAULT_BLOCK_DURATION_MS = 15 * 60 * 1000 // 15 minutes
-
 /**
- * Returns the configured max requests per IP per window.
- * @returns {number}
+ * Extracts the client IP address from a Fastify request.
+ * Uses X-Forwarded-For header when present, falling back to direct connection IP.
+ *
+ * @param {object} request - Fastify request object
+ * @returns {string} The client IP address
  */
-function getIpMaxRequests() {
-  const envVal = process.env.RATE_LIMIT_IP_MAX
-  if (envVal !== undefined) {
-    const parsed = Number(envVal)
-    if (Number.isInteger(parsed) && parsed > 0) {
-      return parsed
-    }
+export function getClientIp(request) {
+  const forwarded = request.headers['x-forwarded-for']
+  if (forwarded) {
+    // X-Forwarded-For can contain multiple IPs; use the first (client IP)
+    const first = forwarded.split(',')[0].trim()
+    if (first) return first
   }
-  return DEFAULT_IP_MAX_REQUESTS
-}
-
-/**
- * Returns the configured max requests per wallet per window.
- * @returns {number}
- */
-function getWalletMaxRequests() {
-  const envVal = process.env.RATE_LIMIT_WALLET_MAX
-  if (envVal !== undefined) {
-    const parsed = Number(envVal)
-    if (Number.isInteger(parsed) && parsed > 0) {
-      return parsed
-    }
-  }
-  return DEFAULT_WALLET_MAX_REQUESTS
-}
-
-/**
- * Returns the configured window duration in milliseconds.
- * @returns {number}
- */
-function getWindowMs() {
-  const envVal = process.env.RATE_LIMIT_WINDOW_MS
-  if (envVal !== undefined) {
-    const parsed = Number(envVal)
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed
-    }
-  }
-  return DEFAULT_WINDOW_MS
-}
-
-/**
- * Returns the configured block duration in milliseconds.
- * @returns {number}
- */
-function getBlockDurationMs() {
-  const envVal = process.env.RATE_LIMIT_BLOCK_DURATION_MS
-  if (envVal !== undefined) {
-    const parsed = Number(envVal)
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed
-    }
-  }
-  return DEFAULT_BLOCK_DURATION_MS
+  return request.ip
 }
 
 /**
@@ -73,11 +26,11 @@ function getBlockDurationMs() {
  *
  * @param {string} identifier - The IP address or wallet address to block
  * @param {'ip' | 'wallet'} identifierType - The type of identifier
- * @param {number} [durationMs] - Block duration in milliseconds (defaults to RATE_LIMIT_BLOCK_DURATION_MS or 15 minutes)
+ * @param {number} [durationMs] - Block duration in milliseconds (defaults to config.rateLimitBlockDurationMs)
  * @returns {Promise<object>} The updated or created rate limit record
  */
 export async function blockIdentifier(identifier, identifierType, durationMs) {
-  const duration = durationMs ?? getBlockDurationMs()
+  const duration = durationMs ?? config.rateLimitBlockDurationMs
   const blockedUntil = new Date(Date.now() + duration)
 
   const existing = await prisma.rateLimit.findFirst({
@@ -106,6 +59,11 @@ export async function blockIdentifier(identifier, identifierType, durationMs) {
  * Checks if an IP address has exceeded the rate limit.
  * Throws RateLimitError if the IP is blocked or has exceeded the request limit.
  *
+ * Sliding window logic:
+ * - If blocked (blockedUntil > now): reject with 429 + Retry-After
+ * - If window expired: allow (counter will reset on next increment)
+ * - If request count >= max within active window: reject with 429
+ *
  * @param {string} ipAddress - The IP address to check
  * @throws {RateLimitError} if rate limit is exceeded or IP is temporarily blocked
  */
@@ -129,9 +87,8 @@ export async function checkIpRateLimit(ipAddress) {
     throw new RateLimitError('Too many requests. Please try again later.', { retryAfter })
   }
 
-  const windowMs = getWindowMs()
   const windowStart = record.windowStart.getTime()
-  const windowEnd = windowStart + windowMs
+  const windowEnd = windowStart + config.rateLimitWindowMs
 
   // If window has expired, the counter will be reset on next increment — allow request
   if (now.getTime() >= windowEnd) {
@@ -139,21 +96,20 @@ export async function checkIpRateLimit(ipAddress) {
   }
 
   // Check if request count exceeds limit within active window
-  const maxRequests = getIpMaxRequests()
-  if (record.requestCount >= maxRequests) {
+  if (record.requestCount >= config.rateLimitIpMax) {
     throw new RateLimitError('Too many requests. Please try again later.')
   }
 }
 
 /**
  * Increments the request counter for an IP address.
- * Resets the window if it has expired.
+ * Resets the window if it has expired. Clears block if blockedUntil has passed.
+ * Auto-blocks when count reaches the configured max.
  *
  * @param {string} ipAddress - The IP address to track
  * @returns {Promise<object>} The updated rate limit record
  */
 export async function incrementIpRequestCount(ipAddress) {
-  const windowMs = getWindowMs()
   const now = new Date()
 
   const existing = await prisma.rateLimit.findFirst({
@@ -174,9 +130,9 @@ export async function incrementIpRequestCount(ipAddress) {
     })
   }
 
-  const windowEnd = existing.windowStart.getTime() + windowMs
+  const windowEnd = existing.windowStart.getTime() + config.rateLimitWindowMs
 
-  // Window expired — reset counter
+  // Window expired — reset counter and clear any expired block
   if (now.getTime() >= windowEnd) {
     return prisma.rateLimit.update({
       where: { id: existing.id },
@@ -190,16 +146,14 @@ export async function incrementIpRequestCount(ipAddress) {
 
   // Window still active — increment counter
   const newCount = existing.requestCount + 1
-  const maxRequests = getIpMaxRequests()
 
   // Auto-block when limit is reached
-  if (newCount >= maxRequests) {
-    const blockDuration = getBlockDurationMs()
+  if (newCount >= config.rateLimitIpMax) {
     return prisma.rateLimit.update({
       where: { id: existing.id },
       data: {
         requestCount: newCount,
-        blockedUntil: new Date(Date.now() + blockDuration),
+        blockedUntil: new Date(Date.now() + config.rateLimitBlockDurationMs),
       },
     })
   }
@@ -211,7 +165,6 @@ export async function incrementIpRequestCount(ipAddress) {
     },
   })
 }
-
 
 /**
  * Checks if a wallet has exceeded the rate limit.
@@ -240,9 +193,8 @@ export async function checkWalletRateLimit(walletAddress) {
     throw new RateLimitError('Too many requests. Please try again later.', { retryAfter })
   }
 
-  const windowMs = getWindowMs()
   const windowStart = record.windowStart.getTime()
-  const windowEnd = windowStart + windowMs
+  const windowEnd = windowStart + config.rateLimitWindowMs
 
   // If window has expired, the counter will be reset on next increment — allow request
   if (now.getTime() >= windowEnd) {
@@ -250,21 +202,22 @@ export async function checkWalletRateLimit(walletAddress) {
   }
 
   // Check if request count exceeds limit within active window
-  const maxRequests = getWalletMaxRequests()
-  if (record.requestCount >= maxRequests) {
-    throw new RateLimitError('Too many requests. Please try again later.')
+  if (record.requestCount >= config.rateLimitWalletMax) {
+    // Compute retryAfter based on block duration from now (block will be set on increment)
+    const retryAfter = Math.ceil(config.rateLimitBlockDurationMs / 1000)
+    throw new RateLimitError('Too many requests. Please try again later.', { retryAfter })
   }
 }
 
 /**
  * Increments the request counter for a wallet address.
- * Resets the window if it has expired.
+ * Resets the window if it has expired. Clears block if blockedUntil has passed.
+ * Auto-blocks when count reaches the configured max.
  *
  * @param {string} walletAddress - The wallet address to track
  * @returns {Promise<object>} The updated rate limit record
  */
 export async function incrementWalletRequestCount(walletAddress) {
-  const windowMs = getWindowMs()
   const now = new Date()
 
   const existing = await prisma.rateLimit.findFirst({
@@ -285,9 +238,9 @@ export async function incrementWalletRequestCount(walletAddress) {
     })
   }
 
-  const windowEnd = existing.windowStart.getTime() + windowMs
+  const windowEnd = existing.windowStart.getTime() + config.rateLimitWindowMs
 
-  // Window expired — reset counter
+  // Window expired — reset counter and clear any expired block
   if (now.getTime() >= windowEnd) {
     return prisma.rateLimit.update({
       where: { id: existing.id },
@@ -301,16 +254,14 @@ export async function incrementWalletRequestCount(walletAddress) {
 
   // Window still active — increment counter
   const newCount = existing.requestCount + 1
-  const maxRequests = getWalletMaxRequests()
 
   // Auto-block when limit is reached
-  if (newCount >= maxRequests) {
-    const blockDuration = getBlockDurationMs()
+  if (newCount >= config.rateLimitWalletMax) {
     return prisma.rateLimit.update({
       where: { id: existing.id },
       data: {
         requestCount: newCount,
-        blockedUntil: new Date(Date.now() + blockDuration),
+        blockedUntil: new Date(Date.now() + config.rateLimitBlockDurationMs),
       },
     })
   }

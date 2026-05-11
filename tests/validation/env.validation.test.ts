@@ -144,7 +144,7 @@ describe('Environment Configuration Validation', () => {
         CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY: '', // missing
       }
 
-      const stderrSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
       const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
         throw new Error('process.exit called')
       }) as never)

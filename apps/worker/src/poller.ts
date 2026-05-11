@@ -45,17 +45,26 @@ export function createPoller(config: WorkerConfig): Poller {
         LIMIT ${config.batchSize}
       `
 
-      // Dispatch each request to the processor sequentially
+      // Dispatch each request to the processor sequentially.
+      // Each request is wrapped in its own try/catch so that an unhandled exception
+      // from one request does not prevent processing of remaining batch items (Req 9.6).
       for (const request of pendingRequests) {
         if (!isRunning) break
 
-        const result = await processRequest(request.id, config)
+        try {
+          const result = await processRequest(request.id, config)
 
-        // Log failures and continue with remaining batch (Req 1.6)
-        if (!result.success) {
-          logger.error('Failed to process request', {
+          if (!result.success) {
+            logger.error('Failed to process request', {
+              requestId: request.id,
+              error: result.error,
+            })
+          }
+        } catch (requestError) {
+          const message = requestError instanceof Error ? requestError.message : String(requestError)
+          logger.error('Unhandled exception processing request', {
             requestId: request.id,
-            error: result.error,
+            error: message,
           })
         }
       }

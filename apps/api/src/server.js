@@ -2,7 +2,24 @@ import Fastify from 'fastify'
 import pino from 'pino'
 import { prisma } from '@arcpass/shared'
 import { config } from './lib/config.js'
-import { ValidationError, BlockedWalletError, WalletNotFoundError, SponsorshipNotFoundError, RateLimitError } from './lib/errors.js'
+import {
+  checkIpRateLimit,
+  incrementIpRequestCount,
+  checkWalletRateLimit,
+  incrementWalletRequestCount,
+  getClientIp,
+} from './services/rate-limit.service.js'
+
+// Plugins (registered in order)
+import corsPlugin from './plugins/cors.js'
+import securityHeadersPlugin from './plugins/security-headers.js'
+import correlationIdPlugin from './plugins/correlation-id.js'
+import contentTypeCheckPlugin from './plugins/content-type-check.js'
+import replayProtectionPlugin from './plugins/replay-protection.js'
+import errorHandlerPlugin from './plugins/error-handler.js'
+import notFoundHandlerPlugin from './plugins/not-found-handler.js'
+
+// Routes
 import healthRoutes from './routes/health.js'
 import walletRoutes from './routes/wallets.js'
 import sponsorshipRoutes from './routes/sponsorship.js'
@@ -13,62 +30,51 @@ const app = Fastify({
     level: config.logLevel,
     timestamp: pino.stdTimeFunctions.isoTime,
   },
+  // Disable X-Powered-By header (Fastify doesn't add it by default,
+  // but explicitly ensure no server identification is exposed)
+  exposeHeadRoutes: true,
 })
 
-// Custom error handler — maps errors to standard response shape
-app.setErrorHandler((error, request, reply) => {
-  if (error.validation) {
-    return reply.status(400).send({
-      error: error.message,
-      statusCode: 400,
-    })
+// --- Plugin Registration (order matters) ---
+
+// 1. CORS plugin — handles OPTIONS preflight before other hooks
+app.register(corsPlugin)
+
+// 2. Security headers — attaches headers to all responses
+app.register(securityHeadersPlugin)
+
+// 3. Correlation ID — generates/validates request IDs
+app.register(correlationIdPlugin)
+
+// 4. Content-type check — validates POST Content-Type
+app.register(contentTypeCheckPlugin)
+
+// 5. Replay protection — checks 5s deduplication window
+app.register(replayProtectionPlugin)
+
+// 6. Error handler — replaces inline setErrorHandler
+app.register(errorHandlerPlugin)
+
+// --- IP Rate Limiting (preHandler on all routes) ---
+app.addHook('preHandler', async (request, reply) => {
+  // Skip health check from rate limiting
+  if (request.url === '/health') {
+    return
   }
 
-  // Handle JSON parse errors and other Fastify 400-level errors (e.g., malformed body)
-  if (error.statusCode === 400) {
-    return reply.status(400).send({ error: error.message, statusCode: 400 })
-  }
-
-  if (error instanceof ValidationError) {
-    return reply.status(400).send({ error: error.message, statusCode: 400 })
-  }
-
-  if (error instanceof BlockedWalletError) {
-    return reply.status(403).send({ error: error.message, statusCode: 403 })
-  }
-
-  if (error instanceof WalletNotFoundError) {
-    return reply.status(404).send({ error: error.message, statusCode: 404 })
-  }
-
-  if (error instanceof SponsorshipNotFoundError) {
-    return reply.status(404).send({ error: error.message, statusCode: 404 })
-  }
-
-  if (error instanceof RateLimitError) {
-    const response = { error: error.message, statusCode: 429 }
-    if (error.retryAfter) {
-      reply.header('Retry-After', error.retryAfter)
-    }
-    return reply.status(429).send(response)
-  }
-
-  // Unexpected error — log full details and return sanitized response
-  request.log.error(error)
-  return reply.status(500).send({
-    error: 'Internal server error',
-    statusCode: 500,
-  })
+  const clientIp = getClientIp(request)
+  await checkIpRateLimit(clientIp)
+  await incrementIpRequestCount(clientIp)
 })
 
-// Register plugins (cross-cutting concerns)
-// Plugins from plugins/ directory will be registered here as they are added
-
-// Register routes
+// --- Route Registration ---
 app.register(healthRoutes)
 app.register(walletRoutes, { prefix: '/wallets' })
 app.register(sponsorshipRoutes, { prefix: '/sponsorship' })
 app.register(relayRoutes, { prefix: '/relay' })
+
+// 7. Not-found handler (404/405) — must be registered after routes
+app.register(notFoundHandlerPlugin)
 
 async function start() {
   try {

@@ -64,9 +64,9 @@ export async function processRequest(
         const currentStatus = locked[0].status as SponsorshipStatusValue
         const walletId = locked[0].walletId
 
-        // Only process requests that are in 'pending' status
-        if (currentStatus !== 'pending') {
-          logger.info('Skipping request — not in pending status', {
+        // Only process requests that are in 'pending' or 'relayed' (stale execution recovery) status
+        if (currentStatus !== 'pending' && currentStatus !== 'relayed') {
+          logger.info('Skipping request — not in processable status', {
             sponsorshipRequestId: requestId,
             currentStatus,
           })
@@ -78,9 +78,9 @@ export async function processRequest(
           }
         }
 
-        // Step 3: Check wallet.isBlocked → reject if true
+        // Step 3: Check wallet.isBlocked → reject if true (only for pending requests)
         const wallet = await (tx as any).wallet.findUnique({ where: { id: walletId } })
-        if (wallet?.isBlocked) {
+        if (currentStatus === 'pending' && wallet?.isBlocked) {
           await transitionSponsorshipStatus(tx as any, requestId, 'rejected')
           await (tx as any).sponsorshipRequest.update({
             where: { id: requestId },
@@ -151,7 +151,8 @@ export async function processRequest(
           }
         }
 
-        // Step 5: Check retry count — enforce max retry limit
+        // Step 5: Check retry count — enforce max retry limit (Req 9.3, 9.5, 11.3)
+        // Uses >= comparison to ensure no new relay transaction is created at the limit
         const retryCount = await getRetryCount(tx as any, requestId)
         if (retryCount >= config.maxRetries) {
           const failResult = await transitionSponsorshipStatus(
@@ -167,7 +168,7 @@ export async function processRequest(
             retryCount,
             maxRetries: config.maxRetries,
             walletAddress,
-            previousStatus: 'pending',
+            previousStatus: currentStatus,
             newStatus: 'failed',
           })
           return {
@@ -177,41 +178,58 @@ export async function processRequest(
           }
         }
 
-        // Step 6: Transition pending → approved
-        const approveResult = await transitionSponsorshipStatus(
-          tx as any,
-          requestId,
-          'approved'
-        )
-        if (!approveResult.success) {
-          throw new Error(`Failed to transition to approved: ${approveResult.error}`)
-        }
-        logger.info('Status transition', {
-          sponsorshipRequestId: requestId,
-          walletAddress,
-          previousStatus: 'pending',
-          newStatus: 'approved',
-        })
+        // Step 6: Prepare for relay execution
+        // For pending requests: transition pending → approved → relayed
+        // For stale relayed requests: skip transitions, create new relay transaction directly
+        let relayTx: { id: string; relayAttempt: number }
 
-        // Step 7: Create relay transaction
-        const relayTx = await createRelayTransaction(tx as any, requestId)
+        if (currentStatus === 'pending') {
+          // Transition pending → approved
+          const approveResult = await transitionSponsorshipStatus(
+            tx as any,
+            requestId,
+            'approved'
+          )
+          if (!approveResult.success) {
+            throw new Error(`Failed to transition to approved: ${approveResult.error}`)
+          }
+          logger.info('Status transition', {
+            sponsorshipRequestId: requestId,
+            walletAddress,
+            previousStatus: 'pending',
+            newStatus: 'approved',
+          })
 
-        // Step 8: Transition approved → relayed
-        const relayTransitionResult = await transitionSponsorshipStatus(
-          tx as any,
-          requestId,
-          'relayed'
-        )
-        if (!relayTransitionResult.success) {
-          throw new Error(`Failed to transition to relayed: ${relayTransitionResult.error}`)
+          // Create relay transaction
+          relayTx = await createRelayTransaction(tx as any, requestId)
+
+          // Transition approved → relayed
+          const relayTransitionResult = await transitionSponsorshipStatus(
+            tx as any,
+            requestId,
+            'relayed'
+          )
+          if (!relayTransitionResult.success) {
+            throw new Error(`Failed to transition to relayed: ${relayTransitionResult.error}`)
+          }
+          logger.info('Status transition', {
+            sponsorshipRequestId: requestId,
+            relayTransactionId: relayTx.id,
+            walletAddress,
+            previousStatus: 'approved',
+            newStatus: 'relayed',
+          })
+        } else {
+          // Stale execution recovery (currentStatus === 'relayed')
+          // Create new relay transaction with relayAttempt = previous count + 1 (Req 11.2)
+          relayTx = await createRelayTransaction(tx as any, requestId)
+          logger.info('Stale execution recovery — new relay transaction created', {
+            sponsorshipRequestId: requestId,
+            relayTransactionId: relayTx.id,
+            walletAddress,
+            relayAttempt: relayTx.relayAttempt,
+          })
         }
-        logger.info('Status transition', {
-          sponsorshipRequestId: requestId,
-          relayTransactionId: relayTx.id,
-          walletAddress,
-          previousStatus: 'approved',
-          newStatus: 'relayed',
-        })
 
         // Step 9: Update relay transaction to submitted with submittedAt timestamp
         const submitResult = await updateRelayTransaction(

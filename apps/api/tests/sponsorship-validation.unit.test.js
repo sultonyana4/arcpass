@@ -96,74 +96,146 @@ describe('validateWalletNotBlocked', () => {
 })
 
 describe('validateNoPendingRequest', () => {
-  it('does not throw when no pending request exists', async () => {
-    prisma.sponsorshipRequest.findFirst.mockResolvedValue(null)
-
-    await expect(validateNoPendingRequest('wallet-1')).resolves.not.toThrow()
-    expect(prisma.sponsorshipRequest.findFirst).toHaveBeenCalledWith({
-      where: {
-        walletId: 'wallet-1',
-        status: 'pending',
-      },
-    })
-  })
-
-  it('throws ValidationError when a pending request exists', async () => {
-    prisma.sponsorshipRequest.findFirst.mockResolvedValue({
+  it('rejects with "sponsorship already in progress" when a pending request exists', async () => {
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce({
       id: 'req-1',
       walletId: 'wallet-1',
       status: 'pending',
     })
 
-    await expect(validateNoPendingRequest('wallet-1')).rejects.toThrow(
-      'Wallet already has a pending sponsorship request'
-    )
-    await expect(validateNoPendingRequest('wallet-1')).rejects.toMatchObject({
-      name: 'ValidationError',
+    const error = await validateNoPendingRequest('wallet-1').catch((e) => e)
+    expect(error.message).toBe('sponsorship already in progress')
+    expect(error.name).toBe('ValidationError')
+  })
+
+  it('rejects with "sponsorship already in progress" when an approved request exists', async () => {
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce({
+      id: 'req-2',
+      walletId: 'wallet-1',
+      status: 'approved',
     })
+
+    const error = await validateNoPendingRequest('wallet-1').catch((e) => e)
+    expect(error.message).toBe('sponsorship already in progress')
+    expect(error.name).toBe('ValidationError')
+  })
+
+  it('rejects with "sponsorship already in progress" when a relayed request exists', async () => {
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce({
+      id: 'req-3',
+      walletId: 'wallet-1',
+      status: 'relayed',
+    })
+
+    const error = await validateNoPendingRequest('wallet-1').catch((e) => e)
+    expect(error.message).toBe('sponsorship already in progress')
+    expect(error.name).toBe('ValidationError')
+  })
+
+  it('rejects with "wallet has already been sponsored" when a completed request exists', async () => {
+    // No active request found
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce(null)
+    // But a completed request exists
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce({
+      id: 'req-4',
+      walletId: 'wallet-1',
+      status: 'completed',
+    })
+
+    const error = await validateNoPendingRequest('wallet-1').catch((e) => e)
+    expect(error.message).toBe('wallet has already been sponsored')
+    expect(error.name).toBe('ValidationError')
+  })
+
+  it('allows new request when no active or completed sponsorships exist', async () => {
+    // No active request
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce(null)
+    // No completed request
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce(null)
+
+    await expect(validateNoPendingRequest('wallet-1')).resolves.not.toThrow()
+  })
+
+  it('allows new request when most recent is failed (no completed exists)', async () => {
+    // No active request
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce(null)
+    // No completed request
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce(null)
+
+    await expect(validateNoPendingRequest('wallet-with-failed')).resolves.not.toThrow()
+  })
+
+  it('allows new request when most recent is rejected (no completed exists)', async () => {
+    // No active request
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce(null)
+    // No completed request
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce(null)
+
+    await expect(validateNoPendingRequest('wallet-with-rejected')).resolves.not.toThrow()
+  })
+
+  it('queries for active statuses (pending, approved, relayed) first', async () => {
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce(null)
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce(null)
+
+    await validateNoPendingRequest('wallet-1')
+
+    expect(prisma.sponsorshipRequest.findFirst).toHaveBeenNthCalledWith(1, {
+      where: {
+        walletId: 'wallet-1',
+        status: { in: ['pending', 'approved', 'relayed'] },
+      },
+    })
+  })
+
+  it('queries for completed status second', async () => {
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce(null)
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce(null)
+
+    await validateNoPendingRequest('wallet-1')
+
+    expect(prisma.sponsorshipRequest.findFirst).toHaveBeenNthCalledWith(2, {
+      where: {
+        walletId: 'wallet-1',
+        status: 'completed',
+      },
+    })
+  })
+
+  it('does not check completed status if active request is found', async () => {
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce({
+      id: 'req-1',
+      walletId: 'wallet-1',
+      status: 'pending',
+    })
+
+    try {
+      await validateNoPendingRequest('wallet-1')
+    } catch {
+      // expected
+    }
+
+    // Should only have been called once (for active check)
+    expect(prisma.sponsorshipRequest.findFirst).toHaveBeenCalledTimes(1)
   })
 
   it('queries with the exact walletId provided', async () => {
-    prisma.sponsorshipRequest.findFirst.mockResolvedValue(null)
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce(null)
+    prisma.sponsorshipRequest.findFirst.mockResolvedValueOnce(null)
 
     await validateNoPendingRequest('some-uuid-123')
 
-    expect(prisma.sponsorshipRequest.findFirst).toHaveBeenCalledWith({
+    expect(prisma.sponsorshipRequest.findFirst).toHaveBeenNthCalledWith(1, {
       where: {
         walletId: 'some-uuid-123',
-        status: 'pending',
+        status: { in: ['pending', 'approved', 'relayed'] },
       },
     })
-  })
-
-  it('only checks for pending status, not approved/completed/rejected requests', async () => {
-    // Simulate no pending request found (even if approved/completed ones exist)
-    prisma.sponsorshipRequest.findFirst.mockResolvedValue(null)
-
-    await expect(validateNoPendingRequest('wallet-1')).resolves.not.toThrow()
-
-    // Verify the query specifically filters by 'pending' status
-    expect(prisma.sponsorshipRequest.findFirst).toHaveBeenCalledWith({
+    expect(prisma.sponsorshipRequest.findFirst).toHaveBeenNthCalledWith(2, {
       where: {
-        walletId: 'wallet-1',
-        status: 'pending',
+        walletId: 'some-uuid-123',
+        status: 'completed',
       },
     })
-  })
-
-  it('blocks only when status is pending, not other terminal statuses', async () => {
-    // First call: no pending request (wallet has approved/completed requests but not pending)
-    prisma.sponsorshipRequest.findFirst.mockResolvedValue(null)
-    await expect(validateNoPendingRequest('wallet-with-history')).resolves.not.toThrow()
-
-    // Second call: pending request exists - should block
-    prisma.sponsorshipRequest.findFirst.mockResolvedValue({
-      id: 'req-2',
-      walletId: 'wallet-with-history',
-      status: 'pending',
-    })
-    await expect(validateNoPendingRequest('wallet-with-history')).rejects.toThrow(
-      'Wallet already has a pending sponsorship request'
-    )
   })
 })

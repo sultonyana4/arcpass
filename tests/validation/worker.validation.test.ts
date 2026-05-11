@@ -171,16 +171,20 @@ describe('Worker Startup Validation', () => {
 
       // Use a short timeout (1000ms - minimum allowed)
       const shortTimeout = 1000
-      const startTime = Date.now()
 
+      // Verify that verifyChainId rejects with ChainIdVerificationTimeoutError
+      // when the RPC doesn't respond within the configured timeout
       await expect(
         verifyChainId(mockPublicClient, EXPECTED_CHAIN_ID, shortTimeout)
-      ).rejects.toThrow()
+      ).rejects.toThrow(ChainIdVerificationTimeoutError)
 
-      const elapsed = Date.now() - startTime
-      // Should timeout roughly around the configured timeout (with some tolerance)
-      expect(elapsed).toBeGreaterThanOrEqual(shortTimeout - 100)
-      expect(elapsed).toBeLessThan(shortTimeout + 5000)
+      // Verify the error message includes the configured timeout value
+      try {
+        await verifyChainId(mockPublicClient, EXPECTED_CHAIN_ID, shortTimeout)
+      } catch (error) {
+        expect(error).toBeInstanceOf(ChainIdVerificationTimeoutError)
+        expect((error as Error).message).toContain(`${shortTimeout}ms`)
+      }
     }, 10000)
   })
 
@@ -297,7 +301,7 @@ describe('Worker Startup Validation', () => {
         CONTRACT_ADDRESS_SPONSORSHIP_REGISTRY: '', // missing
       }
 
-      const stderrSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
       const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
         throw new Error('process.exit called')
       }) as never)

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createLogger } from '../../src/logger.js'
+import { createLogger, filterSensitiveData } from '../../src/logger.js'
 
 describe('logger', () => {
   let stdoutSpy: ReturnType<typeof vi.spyOn>
@@ -197,6 +197,136 @@ describe('logger', () => {
       expect(entry.requestId).toBe('abc-123')
       expect(entry.txHash).toBe('0x1234')
       expect(entry.blockNumber).toBe(42)
+    })
+  })
+
+  describe('max recursion depth', () => {
+    it('replaces objects beyond max depth (10 levels) with [REDACTED]', () => {
+      // Build a deeply nested object (11 levels deep)
+      let nested: Record<string, unknown> = { value: 'deep' }
+      for (let i = 0; i < 11; i++) {
+        nested = { level: nested }
+      }
+
+      const result = filterSensitiveData(nested)
+      // Navigate 9 levels deep (0-indexed depth 0..9 = 10 levels)
+      let current: any = result
+      for (let i = 0; i < 9; i++) {
+        expect(typeof current.level).toBe('object')
+        current = current.level
+      }
+      // At depth 10, the object should be replaced with [REDACTED]
+      expect(current.level).toBe('[REDACTED]')
+    })
+
+    it('allows objects at exactly depth 9 (10th level of nesting)', () => {
+      // Build exactly 10 levels deep
+      let nested: Record<string, unknown> = { value: 'deep' }
+      for (let i = 0; i < 9; i++) {
+        nested = { level: nested }
+      }
+
+      const result = filterSensitiveData(nested)
+      // Navigate to the deepest level
+      let current: any = result
+      for (let i = 0; i < 8; i++) {
+        expect(typeof current.level).toBe('object')
+        current = current.level
+      }
+      // At depth 9, the innermost object should still be processed
+      expect(current.level).toEqual({ value: 'deep' })
+    })
+
+    it('respects custom maxDepth parameter', () => {
+      const data = { a: { b: { c: { d: 'value' } } } }
+      const result = filterSensitiveData(data, 2)
+      expect(result.a).toEqual({ b: '[REDACTED]' })
+    })
+
+    it('still redacts sensitive keys at any depth before max', () => {
+      const data = { level1: { level2: { password: 'secret123' } } }
+      const result = filterSensitiveData(data)
+      expect((result.level1 as any).level2.password).toBe('[REDACTED]')
+    })
+  })
+
+  describe('message truncation', () => {
+    it('truncates messages longer than 10,000 characters', () => {
+      const logger = createLogger('worker')
+      const longMessage = 'x'.repeat(15_000)
+      logger.info(longMessage)
+
+      const entry = JSON.parse(stdoutSpy.mock.calls[0][0] as string)
+      expect(entry.message.length).toBe(10_000)
+    })
+
+    it('does not truncate messages at exactly 10,000 characters', () => {
+      const logger = createLogger('worker')
+      const exactMessage = 'y'.repeat(10_000)
+      logger.info(exactMessage)
+
+      const entry = JSON.parse(stdoutSpy.mock.calls[0][0] as string)
+      expect(entry.message.length).toBe(10_000)
+      expect(entry.message).toBe(exactMessage)
+    })
+
+    it('does not truncate messages shorter than 10,000 characters', () => {
+      const logger = createLogger('worker')
+      const shortMessage = 'hello world'
+      logger.info(shortMessage)
+
+      const entry = JSON.parse(stdoutSpy.mock.calls[0][0] as string)
+      expect(entry.message).toBe(shortMessage)
+    })
+  })
+
+  describe('credential URL pattern', () => {
+    it('redacts http://user:pass@host URLs', () => {
+      const logger = createLogger('worker')
+      logger.info('connecting', { url: 'http://admin:password123@db.example.com:5432/mydb' })
+
+      const entry = JSON.parse(stdoutSpy.mock.calls[0][0] as string)
+      expect(entry.url).toBe('[REDACTED_URL]')
+    })
+
+    it('redacts https://user:pass@host URLs', () => {
+      const logger = createLogger('worker')
+      logger.info('connecting', { url: 'https://user:p%40ss@rpc.example.com/v1' })
+
+      const entry = JSON.parse(stdoutSpy.mock.calls[0][0] as string)
+      expect(entry.url).toBe('[REDACTED_URL]')
+    })
+
+    it('redacts URLs with special characters in password', () => {
+      const logger = createLogger('worker')
+      logger.info('connecting', { url: 'https://user:p@ss!word@host.com' })
+
+      const entry = JSON.parse(stdoutSpy.mock.calls[0][0] as string)
+      expect(entry.url).toBe('[REDACTED_URL]')
+    })
+
+    it('redacts URLs with numeric user and pass', () => {
+      const logger = createLogger('worker')
+      logger.info('connecting', { url: 'http://123:456@localhost:3000' })
+
+      const entry = JSON.parse(stdoutSpy.mock.calls[0][0] as string)
+      expect(entry.url).toBe('[REDACTED_URL]')
+    })
+
+    it('does not redact URLs without credentials', () => {
+      const logger = createLogger('worker')
+      logger.info('connecting', { url: 'https://rpc.example.com/v1' })
+
+      const entry = JSON.parse(stdoutSpy.mock.calls[0][0] as string)
+      expect(entry.url).toBe('https://rpc.example.com/v1')
+    })
+
+    it('does not redact URLs with only a user (no password)', () => {
+      const logger = createLogger('worker')
+      logger.info('connecting', { url: 'https://user@host.com' })
+
+      const entry = JSON.parse(stdoutSpy.mock.calls[0][0] as string)
+      expect(entry.url).toBe('https://user@host.com')
     })
   })
 })
