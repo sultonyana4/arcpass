@@ -92,7 +92,7 @@ export function InfraRefresh() {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS)
 
-      const response = await fetch(`${config.apiUrl}/health`, {
+      const response = await fetch(`/api/backend/health`, {
         signal: controller.signal,
       })
       clearTimeout(timeoutId)

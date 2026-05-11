@@ -14,16 +14,20 @@ export interface AppConfig {
 
 /**
  * Resolve the API URL based on execution context.
- * Server-side (SSR) uses API_URL_INTERNAL if available (for Docker networking).
- * Client-side (browser) always uses NEXT_PUBLIC_API_URL.
+ *
+ * Client-side (browser): uses relative path "/api/backend" so requests go through
+ * Next.js rewrites on the same origin. No CORS, no exposed backend port.
+ *
+ * Server-side (SSR): uses API_URL_INTERNAL for Docker service-to-service
+ * communication, falling back to localhost for local dev.
  */
 function resolveApiUrl(): string {
-  // In the browser, only NEXT_PUBLIC_* vars are available
+  // In the browser, use relative path — Next.js rewrites proxy to backend
   if (typeof window !== 'undefined') {
-    return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'
+    return '/api/backend'
   }
-  // Server-side: prefer internal URL for Docker service-to-service communication
-  return process.env.API_URL_INTERNAL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'
+  // Server-side: direct service-to-service communication
+  return process.env.API_URL_INTERNAL || 'http://localhost:4000'
 }
 
 export const config: AppConfig = {
